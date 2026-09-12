@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="vi" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT Local Weather SCADA & AI Forecasting</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        scada: {
+                            bg: '#0b0f19',
+                            card: '#151d30',
+                            border: '#1f293d',
+                            accent: '#06b6d4',
+                            warning: '#f59e0b',
+                            danger: '#ef4444',
+                            success: '#10b981'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- ApexCharts CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="bg-[#090d16] text-slate-100 min-h-screen">
+
+    <!-- Top Navigation / SCADA Header -->
+    <header class="border-b border-slate-800 bg-[#0d1322]/80 backdrop-blur sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-9 h-9 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 00-9.78 2.096A4.001 4.001 0 003 15z" />
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-lg font-bold tracking-wide text-slate-100 flex items-center gap-2">
+                        IOT LOCAL WEATHER SCADA
+                        <span class="text-xs px-2 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800 font-mono">v1.0</span>
+                    </h1>
+                    <p class="text-xs text-slate-400 font-mono">STATION: <span class="text-cyan-400" id="station-id">station01</span> | PROTOCOL: MQTT QoS 1</p>
+                </div>
+            </div>
+
+            <div class="flex items-center space-x-4">
+                <!-- Status Badge -->
+                <div class="flex items-center space-x-2 bg-slate-900/80 px-3 py-1.5 rounded-full border border-slate-800 text-xs font-mono">
+                    <span class="relative flex h-2.5 w-2.5">
+                        <span class="pulse-indicator absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" id="status-ping"></span>
+                        <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" id="status-dot"></span>
+                    </span>
+                    <span id="connection-status" class="text-emerald-400">WS CONNECTED</span>
+                </div>
+
+                <!-- Clock -->
+                <div class="text-xs font-mono text-slate-400 hidden sm:block" id="live-clock">--:--:-- UTC</div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+        <!-- Anomaly & Rain Alert Banner (Hidden by default) -->
+        <div id="alert-banner" class="hidden p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start space-x-3 text-amber-300">
+            <svg class="w-6 h-6 flex-shrink-0 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+            <div class="flex-1 text-sm">
+                <span class="font-bold uppercase tracking-wider block" id="alert-title">Cảnh báo hệ thống</span>
+                <span id="alert-message" class="text-slate-300">Nội dung cảnh báo...</span>
+            </div>
+        </div>
+
+        <!-- 4 Realtime Metric Cards -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            
+            <!-- Temperature -->
+            <div class="scada-card rounded-2xl p-5 relative overflow-hidden group hover:border-cyan-500/40 transition-all">
+                <div class="flex justify-between items-start mb-2">
+                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Nhiệt độ (BME280)</span>
+                    <span class="p-2 rounded-lg bg-orange-500/10 text-orange-400">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    </span>
+                </div>
+                <div class="flex items-baseline space-x-2">
+                    <span class="text-3xl font-bold font-mono text-slate-100" id="card-temp">--.-</span>
+                    <span class="text-sm font-semibold text-slate-400">°C</span>
+                </div>
+                <div class="mt-3 text-xs text-slate-400 flex items-center justify-between">
+                    <span>Sai lệch vs OpenWeather:</span>
+                    <span class="font-mono text-cyan-400" id="bias-temp">±0.0°C</span>
+                </div>
+            </div>
+
+            <!-- Humidity -->
+            <div class="scada-card rounded-2xl p-5 relative overflow-hidden group hover:border-cyan-500/40 transition-all">
+                <div class="flex justify-between items-start mb-2">
+                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Độ ẩm Không khí</span>
+                    <span class="p-2 rounded-lg bg-blue-500/10 text-blue-400">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+                    </span>
+                </div>
+                <div class="flex items-baseline space-x-2">
+                    <span class="text-3xl font-bold font-mono text-slate-100" id="card-hum">--.-</span>
+                    <span class="text-sm font-semibold text-slate-400">%</span>
+                </div>
+                <div class="mt-3 w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                    <div class="bg-blue-500 h-1.5 rounded-full transition-all duration-500" id="bar-hum" style="width: 50%"></div>
+                </div>
+            </div>
+
+            <!-- Atmospheric Pressure -->
+            <div class="scada-card rounded-2xl p-5 relative overflow-hidden group hover:border-cyan-500/40 transition-all">
+                <div class="flex justify-between items-start mb-2">
+                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Khí áp Khí quyển</span>
+                    <span class="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                    </span>
+                </div>
+                <div class="flex items-baseline space-x-2">
+                    <span class="text-3xl font-bold font-mono text-slate-100" id="card-press">----.-</span>
+                    <span class="text-sm font-semibold text-slate-400">hPa</span>
+                </div>
+                <div class="mt-3 text-xs text-slate-400 flex items-center justify-between">
+                    <span>Xu hướng:</span>
+                    <span class="font-mono text-emerald-400" id="trend-press">Ổn định</span>
+                </div>
+            </div>
+
+            <!-- Rain Sensor Status -->
+            <div class="scada-card rounded-2xl p-5 relative overflow-hidden group hover:border-cyan-500/40 transition-all">
+                <div class="flex justify-between items-start mb-2">
+                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Trạng thái Cảm biến Mưa</span>
+                    <span class="p-2 rounded-lg bg-cyan-500/10 text-cyan-400">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+                    </span>
+                </div>
+                <div class="flex items-baseline space-x-2">
+                    <span class="text-2xl font-bold font-mono text-emerald-400" id="card-rain-status">KHÔ RÁO</span>
+                </div>
+                <div class="mt-3 text-xs text-slate-400 flex items-center justify-between">
+                    <span>Giá trị ADC thô:</span>
+                    <span class="font-mono text-slate-300" id="card-rain-raw">----</span>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Middle Section: Chart & Forecast Cards -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+            <!-- Realtime Comparative Chart (2 cols) -->
+            <div class="scada-card rounded-2xl p-6 lg:col-span-2 space-y-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h2 class="text-base font-bold text-slate-100 tracking-wide">Chuỗi Thời Gian & Đối Chuẩn Khí Tượng</h2>
+                        <p class="text-xs text-slate-400">So sánh số liệu thực tế từ trạm đo IoT với dữ liệu trạm OpenWeatherMap</p>
+                    </div>
+                    <span class="text-xs font-mono px-2 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700">Realtime Stream</span>
+                </div>
+                <div id="weather-chart" class="w-full h-72"></div>
+            </div>
+
+            <!-- Short-Term AI Forecasting Panel (1 col) -->
+            <div class="scada-card rounded-2xl p-6 space-y-5">
+                <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <div>
+                        <h2 class="text-base font-bold text-slate-100 tracking-wide">Dự Báo Ngắn Hạn AI</h2>
+                        <p class="text-xs text-slate-400">Mô hình Hồi quy + Phân loại hiệu chuẩn</p>
+                    </div>
+                    <button id="btn-refresh-forecast" class="text-xs text-cyan-400 hover:text-cyan-300 transition-colors flex items-center gap-1">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        Làm mới
+                    </button>
+                </div>
+
+                <!-- Forecast Horizons: +10m, +30m, +60m -->
+                <div class="space-y-3">
+                    <!-- +10 min -->
+                    <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+                        <div class="flex justify-between items-center mb-1">
+                            <span class="text-xs font-mono text-cyan-400 font-bold">+10 PHÚT</span>
+                            <span class="text-sm font-bold font-mono text-slate-200" id="fc-temp-10">--.- °C</span>
+                        </div>
+                        <div class="flex justify-between items-center text-xs text-slate-400 mb-1.5">
+                            <span>Xác suất mưa:</span>
+                            <span class="font-mono text-slate-200" id="fc-rain-10">--%</span>
+                        </div>
+                        <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                            <div class="bg-cyan-500 h-2 rounded-full transition-all duration-500" id="fc-bar-10" style="width: 20%"></div>
+                        </div>
+                    </div>
+
+                    <!-- +30 min -->
+                    <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+                        <div class="flex justify-between items-center mb-1">
+                            <span class="text-xs font-mono text-cyan-400 font-bold">+30 PHÚT</span>
+                            <span class="text-sm font-bold font-mono text-slate-200" id="fc-temp-30">--.- °C</span>
+                        </div>
+                        <div class="flex justify-between items-center text-xs text-slate-400 mb-1.5">
+                            <span>Xác suất mưa:</span>
+                            <span class="font-mono text-slate-200" id="fc-rain-30">--%</span>
+                        </div>
+                        <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                            <div class="bg-amber-500 h-2 rounded-full transition-all duration-500" id="fc-bar-30" style="width: 45%"></div>
+                        </div>
+                    </div>
+
+                    <!-- +60 min -->
+                    <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+                        <div class="flex justify-between items-center mb-1">
+                            <span class="text-xs font-mono text-cyan-400 font-bold">+60 PHÚT</span>
+                            <span class="text-sm font-bold font-mono text-slate-200" id="fc-temp-60">--.- °C</span>
+                        </div>
+                        <div class="flex justify-between items-center text-xs text-slate-400 mb-1.5">
+                            <span>Xác suất mưa:</span>
+                            <span class="font-mono text-slate-200" id="fc-rain-60">--%</span>
+                        </div>
+                        <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                            <div class="bg-rose-500 h-2 rounded-full transition-all duration-500" id="fc-bar-60" style="width: 75%"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2-Way Closed-Loop Control Widget -->
+                <div class="border-t border-slate-800 pt-4 space-y-3">
+                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400 block">Điều Khiển Ngưỡng Cảnh Báo Phản Hồi</span>
+                    <div class="flex items-center justify-between text-xs font-mono">
+                        <span class="text-slate-400">Ngưỡng mưa kích hoạt còi:</span>
+                        <span class="text-cyan-400 font-bold text-sm" id="threshold-val">70%</span>
+                    </div>
+                    <input type="range" min="40" max="95" value="70" step="5" class="w-full accent-cyan-400 cursor-pointer" id="threshold-slider">
+                    <button id="btn-save-threshold" class="w-full py-2 px-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 text-xs font-semibold tracking-wider text-white transition-all shadow-lg shadow-cyan-900/30">
+                        CẬP NHẬT XUỐNG SERVER
+                    </button>
+                    <span id="threshold-status" class="text-xs text-center block text-slate-400"></span>
+                </div>
+
+            </div>
+
+        </div>
+
+    </main>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
+

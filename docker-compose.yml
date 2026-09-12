@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  # MQTT Broker (Eclipse Mosquitto)
+  mqtt-broker:
+    image: eclipse-mosquitto:2.0
+    container_name: weather_mqtt_broker
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # MQTT standard port
+      - "9001:9001"   # MQTT WebSocket port
+    volumes:
+      - ./docker/mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+
+  # Time-Series Database (PostgreSQL 15+)
+  postgres-db:
+    image: postgres:15-alpine
+    container_name: weather_postgres_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-weather_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-weather_secure_pass_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-weather_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/migrations/001_init_schema.sql:/docker-entrypoint-initdb.d/001_init_schema.sql
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:
+  postgres_data:
+

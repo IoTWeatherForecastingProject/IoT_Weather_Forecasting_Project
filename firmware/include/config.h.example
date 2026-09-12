@@ -1,0 +1,50 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// ==============================================================================
+// CẤU HÌNH THÔNG SỐ TRẠM ĐO IOT (MẪU)
+// Hãy sao chép tệp này thành config.h và điền thông tin mạng của bạn.
+// ==============================================================================
+
+// WiFi Credentials
+#define WIFI_SSID       "YOUR_WIFI_SSID"
+#define WIFI_PASSWORD   "YOUR_WIFI_PASSWORD"
+
+// MQTT Broker Configuration
+#define MQTT_BROKER_HOST    "192.168.1.100"  // Địa chỉ IP máy tính chạy MQTT Broker
+#define MQTT_BROKER_PORT    1883
+#define MQTT_CLIENT_ID      "esp_weather_station_01"
+#define MQTT_USERNAME       "weather_admin"
+#define MQTT_PASSWORD       "weather_secure_pass_2026"
+
+// MQTT Topics
+#define TOPIC_WEATHER_DATA      "weather/station01/data"
+#define TOPIC_WEATHER_ALERT     "weather/station01/alert"
+#define TOPIC_WEATHER_STATUS    "weather/station01/status"
+
+// Chu kỳ đọc và gửi dữ liệu (mili-giây)
+#define SAMPLING_INTERVAL_MS    5000  // 5 giây một lần
+
+// Định nghĩa chân phần cứng (ESP32)
+#ifdef ESP32_BOARD
+  #define PIN_I2C_SDA           21
+  #define PIN_I2C_SCL           22
+  #define PIN_RAIN_ANALOG       34
+  #define PIN_RAIN_DIGITAL      35
+  #define PIN_BUZZER            19
+  #define PIN_STATUS_LED        18
+#else
+  // ESP8266 NodeMCU
+  #define PIN_I2C_SDA           4   // D2
+  #define PIN_I2C_SCL           5   // D1
+  #define PIN_RAIN_ANALOG       A0  // A0
+  #define PIN_RAIN_DIGITAL      14  // D5
+  #define PIN_BUZZER            12  // D6
+  #define PIN_STATUS_LED        13  // D7
+#endif
+
+// Ngưỡng phát hiện mưa từ cảm biến Analog (0 - 4095 cho ESP32 hoặc 0 - 1023 cho ESP8266)
+#define RAIN_ANALOG_THRESHOLD   2500
+
+#endif // CONFIG_H
+
