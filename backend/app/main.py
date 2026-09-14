@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.api.endpoints import router as weather_router
 from app.ingestion.mqtt_worker import MQTTIngestionWorker
+from app.db.session import check_db_connection
 
 # Cấu hình logging
 logging.basicConfig(
@@ -101,6 +102,7 @@ def health_check():
     return {
         "status": "online",
         "service": "IoT Weather Backend",
+        "database_connected": check_db_connection(),
         "mqtt_connected": mqtt_worker.client.is_connected() if mqtt_worker else False,
         "active_ws_clients": len(ws_manager.active_connections)
     }

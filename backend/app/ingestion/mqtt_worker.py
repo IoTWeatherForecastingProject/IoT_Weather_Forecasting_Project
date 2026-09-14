@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
 from app.config import settings
-from app.db.session import SessionLocal
+from app.db.session import get_db_context
 from app.db.models import WeatherMeasurement
 
 logger = logging.getLogger(__name__)
@@ -45,10 +45,9 @@ class MQTTIngestionWorker:
             rain_raw = data.get("rain_raw")
             rain_detected = int(data.get("rain_detected", 0))
 
-            # Lưu vào PostgreSQL
-            if SessionLocal:
-                db = SessionLocal()
-                try:
+            # Lưu vào PostgreSQL an toàn theo luồng (Thread-safe)
+            try:
+                with get_db_context() as db:
                     record = WeatherMeasurement(
                         device_id=device_id,
                         timestamp=datetime.now(timezone.utc),
@@ -59,10 +58,8 @@ class MQTTIngestionWorker:
                         rain_detected=rain_detected
                     )
                     db.add(record)
-                    db.commit()
-                    db.refresh(record)
-                finally:
-                    db.close()
+            except Exception as dbe:
+                logger.error("[MQTT WORKER] Loi ghi DB: %s", dbe)
 
             # Bắn broadcast tới WebSocket client
             if self.broadcast_callback:
