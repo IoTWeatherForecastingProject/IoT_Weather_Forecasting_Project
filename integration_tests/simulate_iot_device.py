@@ -50,12 +50,15 @@ def on_message(client, userdata, msg):
         logger.error("Loi doc payload canh bao: %s", e)
 
 
-def run_simulator(broker: str, port: int, interval: int, simulate_rain: bool, simulate_anomaly: bool):
+def run_simulator(broker: str, port: int, interval: int, simulate_rain: bool, simulate_anomaly: bool,
+                  username: str = "weather_admin", password: str = "weather_secure_pass_2026"):
     client = mqtt.Client(client_id="mock_esp_weather_station", clean_session=True)
+    if username and password:
+        client.username_pw_set(username, password)
     client.on_connect = on_connect
     client.on_message = on_message
 
-    logger.info("Dang ket noi toi MQTT Broker %s:%d...", broker, port)
+    logger.info("Dang ket noi toi MQTT Broker %s:%d (User: %s)...", broker, port, username)
     try:
         client.connect(broker, port, keepalive=60)
         client.loop_start()
@@ -125,9 +128,12 @@ if __name__ == "__main__":
     parser.add_argument("--broker", default="localhost", help="Dia chi MQTT Broker")
     parser.add_argument("--port", type=int, default=1883, help="Cong MQTT Broker")
     parser.add_argument("--interval", type=int, default=5, help="Chu ky phat du lieu (giay)")
+    parser.add_argument("--username", default="weather_admin", help="MQTT Username")
+    parser.add_argument("--password", default="weather_secure_pass_2026", help="MQTT Password")
     parser.add_argument("--simulate-rain", action="store_true", help="Kich hoat kich ban mua dong tut ap")
     parser.add_argument("--simulate-anomaly", action="store_true", help="Kich hoat loi dot bien cam bien (Spike)")
 
     args = parser.parse_args()
-    run_simulator(args.broker, args.port, args.interval, args.simulate_rain, args.simulate_anomaly)
+    run_simulator(args.broker, args.port, args.interval, args.simulate_rain, args.simulate_anomaly,
+                  args.username, args.password)
 

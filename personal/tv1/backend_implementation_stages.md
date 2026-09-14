@@ -370,10 +370,10 @@ def _on_message(self, client, userdata, msg):
 ```
 
 #### 5. Checklist nghiệm thu Stage 2
-- [ ] Broker Mosquitto kết nối có xác thực, từ chối client không có credentials.
-- [ ] Báo cáo / số liệu so sánh định lượng QoS 0 vs QoS 1 sẵn sàng đưa vào báo cáo đồ án.
-- [ ] Ingestion Worker chạy ổn định, parse JSON không bị crash khi nhận payload rác hoặc thiếu trường.
-- [ ] Dữ liệu được ghi thành công vào bảng `weather_measurements` và đẩy qua callback.
+- [x] Broker Mosquitto kết nối có xác thực, từ chối client không có credentials (rc=5 khi anonymous).
+- [x] Báo cáo / số liệu so sánh định lượng QoS 0 vs QoS 1 sẵn sàng đưa vào báo cáo đồ án.
+- [x] Ingestion Worker chạy ổn định, parse JSON không bị crash khi nhận payload rác hoặc thiếu trường.
+- [x] Dữ liệu được ghi thành công vào bảng `weather_measurements` và đẩy qua callback.
 
 ---
 
