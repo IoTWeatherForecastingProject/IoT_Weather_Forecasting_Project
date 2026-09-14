@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     MQTT_PASSWORD: str = "weather_secure_pass_2026"
     MQTT_DATA_TOPIC: str = "weather/+/data"
     MQTT_ALERT_TOPIC: str = "weather/station01/alert"
+    MQTT_KEEPALIVE: int = 60
+    MQTT_QOS: int = 1
 
     # Alert & Closed-loop actuation
     RAIN_ALERT_THRESHOLD: float = 0.70
