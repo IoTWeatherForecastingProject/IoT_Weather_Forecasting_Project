@@ -256,9 +256,9 @@ LIMIT 30;
 *Tiêu chí:* Kết quả `Execution Time` phải nhỏ hơn **5ms** nhờ `Index Scan using idx_weather_device_timestamp`.
 
 #### 5. Checklist nghiệm thu Stage 1
-- [ ] Schema và index được tạo đầy đủ trong container PostgreSQL.
-- [ ] Truy vấn cửa sổ trượt 30 bản ghi gần nhất chạy dưới 10ms.
-- [ ] `session.py` có cơ chế `pool_pre_ping` và không rò rỉ session.
+- [x] Schema và index được tạo đầy đủ trong container PostgreSQL.
+- [x] Truy vấn cửa sổ trượt 30 bản ghi gần nhất chạy dưới 10ms (Thực tế đạt ~0.64ms, Execution Time: 0.105ms).
+- [x] `session.py` có cơ chế `pool_pre_ping`, `pool_recycle` và không rò rỉ session.
 
 ---
 

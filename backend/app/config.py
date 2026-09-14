@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     # Database settings
     DATABASE_URL: str = "postgresql://weather_admin:weather_secure_pass_2026@localhost:5432/weather_db"
     ASYNC_DATABASE_URL: str = "postgresql+asyncpg://weather_admin:weather_secure_pass_2026@localhost:5432/weather_db"
+    DB_POOL_PRE_PING: bool = True
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
+    DB_POOL_RECYCLE: int = 1800  # 30 minutes
+    DB_POOL_TIMEOUT: int = 30    # 30 seconds
 
     # MQTT settings
     MQTT_BROKER_HOST: str = "localhost"

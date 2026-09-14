@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 import httpx
 from app.config import settings
-from app.db.session import SessionLocal
+from app.db.session import get_db_context
 from app.db.models import AlertLog
 
 logger = logging.getLogger(__name__)
@@ -100,22 +100,18 @@ class AlertService:
 
     @staticmethod
     def _log_alert_to_db(device_id: str, rain_prob: float, threshold: float, mqtt_sent: bool, telegram_sent: bool, notes: str):
-        if SessionLocal is None:
-            return
         try:
-            db = SessionLocal()
-            log = AlertLog(
-                device_id=device_id,
-                alert_type="rain_warning",
-                rain_probability=rain_prob,
-                threshold=threshold,
-                mqtt_sent=mqtt_sent,
-                telegram_sent=telegram_sent,
-                notes=notes
-            )
-            db.add(log)
-            db.commit()
-            db.close()
+            with get_db_context() as db:
+                log = AlertLog(
+                    device_id=device_id,
+                    alert_type="rain_warning",
+                    rain_probability=rain_prob,
+                    threshold=threshold,
+                    mqtt_sent=mqtt_sent,
+                    telegram_sent=telegram_sent,
+                    notes=notes
+                )
+                db.add(log)
         except Exception as e:
             logger.error("[ALERT ENGINE] Khong the ghi alert log vao DB: %s", e)
 
