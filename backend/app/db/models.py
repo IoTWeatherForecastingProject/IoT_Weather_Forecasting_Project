@@ -1,14 +1,21 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, BigInteger, Numeric, String, DateTime, SmallInteger, Boolean, Text
+from sqlalchemy import (
+    Column, Integer, BigInteger, Numeric, String, DateTime,
+    SmallInteger, Boolean, Text, Index, desc
+)
 from app.db.session import Base
 
 
 class WeatherMeasurement(Base):
     __tablename__ = "weather_measurements"
 
-    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
-    device_id = Column(String(50), nullable=False, index=True)
-    timestamp = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+    __table_args__ = (
+        Index("idx_weather_device_timestamp", "device_id", desc("timestamp")),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    device_id = Column(String(50), nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     temperature = Column(Numeric(5, 2), nullable=False)
     humidity = Column(Numeric(5, 2), nullable=False)
     pressure = Column(Numeric(6, 2), nullable=False)
@@ -20,7 +27,11 @@ class WeatherMeasurement(Base):
 class AlertLog(Base):
     __tablename__ = "alert_logs"
 
-    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
+    __table_args__ = (
+        Index("idx_alert_logs_timestamp", desc("timestamp")),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
     device_id = Column(String(50), nullable=False)
     timestamp = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     alert_type = Column(String(50), nullable=False)
