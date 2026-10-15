@@ -103,7 +103,7 @@ ai_engine/
 
 ## 4. Chuẩn Giao diện Đầu ra của Inference Engine (Unified Contract)
 
-Hàm `predict_forecast(recent_data)` trong `inference/unified_forecast.py` bắt buộc trả về định dạng sau để Backend TV1 không bị lỗi:
+Hàm `predict_forecast(recent_data, threshold=0.70)` trong `inference/unified_forecast.py` bắt buộc trả về định dạng sau để Backend TV1 không bị lỗi. `threshold` là ngưỡng cảnh báo mưa dùng cho `alert_triggered`; mỗi horizon có thêm `rain_source` (`"model"` hoặc `"heuristic"`), trường này bị `ForecastResponse` của backend bỏ qua nên không ảnh hưởng API hiện tại.
 
 ```json
 {
@@ -115,17 +115,20 @@ Hàm `predict_forecast(recent_data)` trong `inference/unified_forecast.py` bắt
   "plus_10m": {
     "temperature_c": 31.0,
     "rain_probability": 0.25,
-    "rain_level": "Low"
+    "rain_level": "Low",
+    "rain_source": "model"
   },
   "plus_30m": {
     "temperature_c": 30.4,
     "rain_probability": 0.62,
-    "rain_level": "Medium"
+    "rain_level": "Medium",
+    "rain_source": "model"
   },
   "plus_60m": {
     "temperature_c": 29.6,
     "rain_probability": 0.84,
-    "rain_level": "High"
+    "rain_level": "High",
+    "rain_source": "model"
   },
   "alert_triggered": true,
   "alert_message": "Canh bao xac suat mua cao trong 60 phut toi!"
@@ -150,14 +153,14 @@ Hàm `predict_forecast(recent_data)` trong `inference/unified_forecast.py` bắt
 
 ### 4.2. Yêu cầu interface cần phối hợp (TV1 / TV2)
 
-| # | Yêu cầu | Bên phụ trách |
-|---|---|---|
-| 1 | `/forecast` truy vấn dữ liệu theo **khoảng thời gian**, không theo số bản ghi: tối thiểu `min_history_minutes` = 61 phút, khuyến nghị `recommended_history_minutes` = 76 phút (dự phòng mất mẫu/lệch bin). Hiện đang lấy 30 bản ghi ≈ 3–5 phút ở chu kỳ 5–10 s nên feature mưa không đủ. | TV1 |
-| 2 | Đầu vào: `timestamp` (UTC ISO-8601, thời điểm đo của thiết bị), `temperature` (°C), `humidity` (%), `pressure` (hPa, áp suất tại trạm — không quy về mực nước biển), `rain_detected` (0/1), `rain_raw` (ADC, bắt buộc nếu có trong `input_columns` của artifact). Một `device_id` mỗi lần gọi. | TV1 |
-| 3 | Thiếu lịch sử hoặc thiếu model một horizon: chỉ horizon đó không có dự báo; **giữ nguyên kết quả model hợp lệ của các horizon còn lại** và log rõ lý do. Hiện `unified_forecast.py` thay **cả 3** horizon bằng heuristic khi thiếu 1 horizon và dùng `print`. | TV2 |
-| 4 | Feature mưa nên dựng bằng `rain_classification.features.resample_to_grid()` + `extract_rain_features()` để khớp lúc train (bin $(t-1\text{m}, t]$, không nội suy). `TimeSeriesPreprocessor.clean_and_resample` dùng bin $[t, t+1\text{m})$ + nội suy/bfill nên lệch nhẹ so với lúc train. | TV2 |
-| 5 | `alert_triggered` cần nhận ngưỡng từ `system_config` (tham số `threshold`) thay vì cố định 0.70. | TV2 + TV1 |
-| 6 | Khối `except` trong `unified_forecast.py` dùng `print` tiếng Việt có dấu: trên console Windows (cp1258) chính lệnh `print` ném `UnicodeEncodeError` khi model mưa từ chối dự đoán do thiếu lịch sử. Cần chuyển sang `logging`. | TV2 |
+| # | Yêu cầu | Bên phụ trách | Trạng thái |
+|---|---|---|---|
+| 1 | `/forecast` truy vấn dữ liệu theo **khoảng thời gian**, không theo số bản ghi: tối thiểu `min_history_minutes` = 61 phút, khuyến nghị `recommended_history_minutes` = 76 phút (dự phòng mất mẫu/lệch bin). Hiện đang lấy 30 bản ghi ≈ 3–5 phút ở chu kỳ 5–10 s nên feature mưa không đủ. | TV1 | Chưa làm |
+| 2 | Đầu vào: `timestamp` (UTC ISO-8601, thời điểm đo của thiết bị), `temperature` (°C), `humidity` (%), `pressure` (hPa, áp suất tại trạm — không quy về mực nước biển), `rain_detected` (0/1), `rain_raw` (ADC, bắt buộc nếu có trong `input_columns` của artifact). Một `device_id` mỗi lần gọi. | TV1 | Chưa làm (backend chưa ép một `device_id`; inference tạm lọc theo trạm của bản ghi mới nhất) |
+| 3 | Thiếu lịch sử hoặc thiếu model một horizon: chỉ horizon đó không có dự báo; **giữ nguyên kết quả model hợp lệ của các horizon còn lại** và log rõ lý do. Hiện `unified_forecast.py` thay **cả 3** horizon bằng heuristic khi thiếu 1 horizon và dùng `print`. | TV2 | Đã làm (`_rain_model_probs`, `rain_source`) |
+| 4 | Feature mưa nên dựng bằng `rain_classification.features.resample_to_grid()` + `extract_rain_features()` để khớp lúc train (bin $(t-1\text{m}, t]$, không nội suy). `TimeSeriesPreprocessor.clean_and_resample` dùng bin $[t, t+1\text{m})$ + nội suy/bfill nên lệch nhẹ so với lúc train. | TV2 | Đã làm |
+| 5 | `alert_triggered` cần nhận ngưỡng từ `system_config` (tham số `threshold`) thay vì cố định 0.70. | TV2 + TV1 | AI: đã thêm tham số `threshold`. TV1: `ForecastClient`/`/forecast` cần truyền `rain_alert_threshold` vào |
+| 6 | Khối `except` trong `unified_forecast.py` dùng `print` tiếng Việt có dấu: trên console Windows (cp1258) chính lệnh `print` ném `UnicodeEncodeError` khi model mưa từ chối dự đoán do thiếu lịch sử. Cần chuyển sang `logging`. | TV2 | Đã làm |
 
 ---
 
