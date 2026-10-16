@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column, Integer, BigInteger, Numeric, String, DateTime,
-    SmallInteger, Boolean, Text, Index, desc
+    SmallInteger, Boolean, Text, Index, desc, UniqueConstraint, text
 )
 from app.db.session import Base
 
@@ -49,3 +49,27 @@ class SystemConfig(Base):
     config_value = Column(String(255), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
+
+
+class ReferenceWeather(Base):
+    """Dữ liệu tham chiếu theo đúng cấu trúc của migration 002."""
+
+    __tablename__ = "reference_weather"
+
+    __table_args__ = (
+        UniqueConstraint("source", "timestamp", name="uq_reference_source_ts"),
+        Index("idx_reference_source_ts", "source", desc("timestamp")),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    source = Column(String(30), nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False)
+    lat = Column(Numeric(8, 5), nullable=False)
+    lon = Column(Numeric(8, 5), nullable=False)
+    temperature = Column(Numeric(5, 2), nullable=True)
+    humidity = Column(Numeric(5, 2), nullable=True)
+    pressure = Column(Numeric(6, 2), nullable=True)
+    precipitation = Column(Numeric(6, 2), nullable=True)
+    fetched_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=text("NOW()")
+    )
