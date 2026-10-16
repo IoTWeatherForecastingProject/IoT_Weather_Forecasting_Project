@@ -93,7 +93,10 @@ ai_engine/
    - Bắt các spike phi lý (Nhiệt độ $> 55^\circ$C hoặc Áp suất $< 900$ hPa).
    - Bắt lỗi kẹt nước (Frozen value): Cảm biến mưa báo ướt liên tục quá 6 tiếng khi độ ẩm môi trường đã giảm xuống dưới 65%.
 4. **Đối chuẩn Khí tượng (`openweather_benchmark/`):**
-   - Định kỳ lấy dữ liệu OpenWeatherMap tại cùng tọa độ trạm đo để phân tích Mean Bias Error (MBE).
+   - Thu thập Open-Meteo hiện tại/lịch sử 1–92 ngày và OpenWeather hiện tại (khi có `OPENWEATHER_API_KEY`) tại cùng tọa độ trạm đo. Các tham số đã đối chiếu với [tài liệu Open-Meteo](https://open-meteo.com/en/docs).
+   - Chuẩn hóa `source, timestamp, lat, lon, temperature, humidity, pressure, precipitation`; timestamp dữ liệu từ nguồn được lưu UTC, áp suất dùng `surface_pressure` hoặc ưu tiên `grnd_level` của OpenWeather. Dữ liệu Open-Meteo là dữ liệu mô hình, không phải phép đo trực tiếp tại trạm.
+   - Giá trị `source`: `open-meteo` (theo giờ, từ `--backfill-days`), `open-meteo-15min` (giá trị 15 phút, từ `--once`/`--loop`), `openweather`. Hai độ phân giải của Open-Meteo được tách để không ghi đè nhau ở các mốc giờ chẵn.
+   - Lưu CSV hoặc bảng `reference_weather`, khử trùng theo `(source, timestamp)`. Giữ `WeatherBenchmarkCrawler.calculate_sensor_bias()` để phân tích Mean Bias Error (MBE).
 
 ---
 
@@ -147,6 +150,31 @@ python rain_classification/train_rain.py
 
 # 3. Chạy kiểm thử hàm suy luận hợp nhất (TV2 & TV3)
 python inference/unified_forecast.py
+
+# 4. Crawler tham chiếu: CSV không cần DB hoặc OpenWeather key
+python -m openweather_benchmark.crawler --once --csv data/processed/reference.csv
+python -m openweather_benchmark.crawler --loop --interval 900 --source open-meteo --csv data/processed/reference.csv
+
+# Áp dụng backend/migrations/002_reference_weather.sql trước khi lưu PostgreSQL
+# DATABASE_URL ưu tiên biến môi trường, sau đó backend/.env
+python -m openweather_benchmark.crawler --backfill-days 2
+python -m openweather_benchmark.crawler --once
+```
+
+Chọn đúng một trong `--once`, `--loop`, `--backfill-days N`; `--interval` chỉ dùng
+với `--loop`. Tọa độ mặc định `10.762622, 106.660172`, thay bằng `--lat`/`--lon`.
+`--source` nhận `all` (mặc định), `open-meteo`, `openweather`; không có key thì bỏ
+qua OpenWeather. Backfill chỉ lấy Open-Meteo vì endpoint OpenWeather hiện tại
+không cung cấp lịch sử. Mỗi yêu cầu có tổng cộng 4 lần thử (timeout 10 giây), chờ
+2/4/8 giây giữa các lần; lỗi 4xx (trừ 429) dừng ngay. Kết nối DB có `connect_timeout`
+10 giây. Ở `--once`/`--backfill-days`, exit code 1 khi không lấy được bản ghi nào hoặc
+lưu thất bại (log nêu rõ nguyên nhân, đã ẩn mật khẩu); `--loop` ghi log rồi chạy tiếp.
+
+Nâng cấp dữ liệu đã crawl trước khi tách `open-meteo-15min` (chạy một lần):
+
+```sql
+UPDATE reference_weather SET source = 'open-meteo-15min'
+WHERE source = 'open-meteo' AND date_part('minute', timestamp) <> 0;
 ```
 
 ---
