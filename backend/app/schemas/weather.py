@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Literal
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
@@ -48,6 +48,9 @@ class ForecastHorizon(BaseModel):
     temperature_c: float = Field(..., description="Nhiệt độ dự báo (°C)", examples=[30.5])
     rain_probability: float = Field(..., description="Xác suất mưa dự báo (0.0 đến 1.0)", examples=[0.72])
     rain_level: str = Field(..., description="Mức độ mưa (Low, Medium, High)", examples=["High"])
+    rain_source: Optional[Literal["model", "heuristic"]] = Field(
+        None, description="Nguồn dự báo xác suất mưa: mô hình hoặc luật heuristic"
+    )
 
     @field_validator("temperature_c", "rain_probability", mode="before")
     @classmethod
@@ -90,3 +93,66 @@ class HealthCheckResponse(BaseModel):
     database_connected: bool = Field(..., description="Trạng thái kết nối CSDL PostgreSQL", examples=[True])
     mqtt_connected: bool = Field(..., description="Trạng thái kết nối MQTT Broker", examples=[True])
     active_ws_clients: int = Field(0, description="Số lượng client WebSocket đang kết nối", examples=[2])
+
+
+class ThresholdResponse(BaseModel):
+    """Ngưỡng cảnh báo hiện tại và nguồn cấu hình."""
+
+    threshold: float = Field(description="Ngưỡng xác suất kích hoạt cảnh báo mưa")
+    source: Literal["db", "default"] = Field(description="Nguồn lấy cấu hình")
+    updated_at: Optional[datetime] = Field(None, description="Lần cập nhật trên DB")
+
+
+class SensorAnomaly(BaseModel):
+    """Dị thường cảm biến, giữ nguyên các chi tiết bổ sung từ bộ phân tích."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str = Field(description="Loại dị thường")
+    sensor: str = Field(description="Tên cảm biến hoặc đại lượng")
+    message: str = Field(description="Mô tả dị thường")
+
+
+class SensorHealthResponse(BaseModel):
+    """Sức khỏe cảm biến trong cửa sổ thời gian UTC của một trạm."""
+
+    device_id: str
+    status: Literal["OK", "WARNING", "FAULT", "UNKNOWN"]
+    checked_at: Optional[datetime] = Field(
+        None, description="Timestamp bản ghi mới nhất đã kiểm tra"
+    )
+    window_minutes: int
+    n_records: int
+    anomalies: list[SensorAnomaly] = Field(default_factory=list)
+    frozen_sensors: list[str] = Field(default_factory=list)
+    rain_drift: bool = False
+    reason: Optional[str] = None
+
+
+class ReferenceWeatherResponse(BaseModel):
+    """Một điểm đo tham chiếu phục vụ biểu đồ đối chuẩn."""
+
+    timestamp: datetime
+    temperature: Optional[float] = None
+    humidity: Optional[float] = None
+    pressure: Optional[float] = None
+
+
+class LatestBiasResponse(BaseModel):
+    """Sai số IoT trừ tham chiếu, riêng từng biến đủ ít nhất ba mẫu."""
+
+    temp_bias_c: Optional[float] = None
+    hum_bias_percent: Optional[float] = None
+    press_bias_hpa: Optional[float] = None
+    reference_timestamp: datetime
+    n_iot: int = Field(description="Tổng số bản ghi IoT trong khoảng ghép ±5 phút")
+
+
+class BenchmarkResponse(BaseModel):
+    """Chuỗi tham chiếu và sai số tại mốc đối chuẩn mới nhất."""
+
+    device_id: str
+    source: str
+    hours: int
+    reference: list[ReferenceWeatherResponse] = Field(default_factory=list)
+    latest_bias: Optional[LatestBiasResponse] = None

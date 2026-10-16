@@ -1,17 +1,24 @@
 import logging
+import math
 from typing import List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
+from sqlalchemy.exc import ProgrammingError
 
+from app.config import settings
 from app.db.session import get_db
-from app.db.models import WeatherMeasurement, SystemConfig
+from app.db.models import WeatherMeasurement, SystemConfig, ReferenceWeather
 from app.schemas.weather import (
     WeatherMeasurementResponse,
     ForecastResponse,
-    ThresholdUpdateRequest
+    ThresholdUpdateRequest,
+    ThresholdResponse,
+    SensorHealthResponse,
+    BenchmarkResponse
 )
+from app.services import analytics_client
 from app.services.forecast_client import ForecastClient
 from app.services.alert_service import AlertService
 
@@ -159,3 +166,187 @@ def update_alert_threshold(
     db.commit()
     logger.info("[CONFIG] Nguoi dung cap nhat nguong canh bao mua moi: %.2f", payload.threshold)
     return {"status": "success", "new_threshold": payload.threshold}
+
+
+@router.get(
+    "/alerts/threshold",
+    response_model=ThresholdResponse,
+    summary="Đọc ngưỡng kích hoạt cảnh báo mưa",
+    description=(
+        "Đọc rain_alert_threshold từ system_config. Nếu chưa có hoặc giá trị "
+        "không hợp lệ, trả ngưỡng mặc định RAIN_ALERT_THRESHOLD; source cho biết "
+        "nguồn cấu hình và updated_at là thời điểm cập nhật trên DB."
+    ),
+)
+def get_alert_threshold(db: Session = Depends(get_db)) -> ThresholdResponse:
+    """Lấy ngưỡng từ DB, dùng cấu hình mặc định khi thiếu hoặc không hợp lệ."""
+    config = (
+        db.query(SystemConfig)
+        .filter(SystemConfig.config_key == "rain_alert_threshold")
+        .first()
+    )
+    if config is not None:
+        try:
+            threshold = float(config.config_value)
+            if not math.isfinite(threshold):
+                raise ValueError("non-finite threshold")
+        except (TypeError, ValueError):
+            logger.warning("[CONFIG] Invalid rain_alert_threshold; using default")
+        else:
+            return ThresholdResponse(
+                threshold=threshold, source="db", updated_at=config.updated_at
+            )
+    return ThresholdResponse(threshold=settings.RAIN_ALERT_THRESHOLD, source="default")
+
+
+@router.get(
+    "/sensor-health",
+    response_model=SensorHealthResponse,
+    summary="Kiểm tra sức khỏe cảm biến của trạm",
+    description=(
+        "Phân tích các bản ghi có timestamp UTC trong window_minutes gần nhất "
+        "(10–1440 phút). Trả OK, WARNING, FAULT hoặc UNKNOWN nếu không có dữ liệu; "
+        "bao gồm dị thường, cảm biến kẹt giá trị và dấu hiệu đọng nước cảm biến mưa. "
+        "Trả 503 khi bộ phát hiện dị thường không khả dụng."
+    ),
+)
+def get_sensor_health(
+    device_id: str = Query(..., min_length=1, description="Mã trạm quan trắc"),
+    window_minutes: int = Query(
+        360, ge=10, le=1440, description="Cửa sổ kiểm tra theo phút, chuẩn UTC"
+    ),
+    db: Session = Depends(get_db),
+) -> SensorHealthResponse:
+    """Lọc dữ liệu theo timestamp UTC rồi kiểm tra sức khỏe cảm biến."""
+    if not analytics_client.HAS_ANOMALY:
+        raise HTTPException(503, detail="anomaly detector unavailable")
+    start = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+    records = (
+        db.query(WeatherMeasurement)
+        .filter(
+            WeatherMeasurement.device_id == device_id,
+            WeatherMeasurement.timestamp >= start,
+        )
+        .order_by(WeatherMeasurement.timestamp)
+        .all()
+    )
+    measurements = [
+        {
+            "timestamp": record.timestamp,
+            "temperature": float(record.temperature),
+            "humidity": float(record.humidity),
+            "pressure": float(record.pressure),
+            "rain_raw": record.rain_raw,
+            "rain_detected": record.rain_detected,
+        }
+        for record in records
+    ]
+    return SensorHealthResponse(
+        **analytics_client.sensor_health(measurements),
+        device_id=device_id,
+        window_minutes=window_minutes,
+        n_records=len(records),
+    )
+
+
+@router.get(
+    "/benchmark",
+    response_model=BenchmarkResponse,
+    summary="Đối chuẩn cảm biến với dữ liệu thời tiết tham chiếu",
+    description=(
+        "Lấy chuỗi reference_weather theo source trong hours gần nhất (1–168 giờ), "
+        "sắp xếp timestamp UTC tăng dần. Sai số IoT trừ tham chiếu tại mốc mới nhất "
+        "có nhiệt độ, độ ẩm hoặc áp suất, dùng trung bình IoT trong ±5 phút và "
+        "ít nhất 3 mẫu cho từng biến. Không ghép được biến nào thì latest_bias=null. "
+        "Trả 503 nếu chưa chạy migration 002."
+    ),
+)
+def get_benchmark(
+    device_id: str = Query(..., min_length=1, description="Mã trạm quan trắc"),
+    source: str = Query(
+        "open-meteo", max_length=30, description="Nguồn dữ liệu tham chiếu"
+    ),
+    hours: int = Query(24, ge=1, le=168, description="Cửa sổ tham chiếu theo giờ UTC"),
+    db: Session = Depends(get_db),
+) -> BenchmarkResponse:
+    """Trả chuỗi tham chiếu và sai số ở mốc mới nhất có dữ liệu đối chuẩn."""
+    start = datetime.now(timezone.utc) - timedelta(hours=hours)
+    try:
+        records = (
+            db.query(ReferenceWeather)
+            .filter(
+                ReferenceWeather.source == source,
+                ReferenceWeather.timestamp >= start,
+            )
+            .order_by(ReferenceWeather.timestamp)
+            .all()
+        )
+    except ProgrammingError as exc:
+        db.rollback()
+        code = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+        if code != "42P01":
+            raise
+        raise HTTPException(
+            503, detail="reference_weather table missing - run migration 002"
+        ) from exc
+    reference = [
+        {
+            "timestamp": record.timestamp,
+            **{
+                field: float(getattr(record, field))
+                if getattr(record, field) is not None
+                else None
+                for field in ("temperature", "humidity", "pressure")
+            },
+        }
+        for record in records
+    ]
+    bias = None
+    latest = next(
+        (
+            record
+            for record in reversed(reference)
+            if any(
+                record[field] is not None
+                for field in ("temperature", "humidity", "pressure")
+            )
+        ),
+        None,
+    )
+    if not analytics_client.HAS_BIAS:
+        logger.warning(
+            "[ANALYTICS] Bias analysis unavailable; returning reference only"
+        )
+    elif latest is not None:
+        tolerance = timedelta(minutes=5)
+        iot = (
+            db.query(WeatherMeasurement)
+            .filter(
+                WeatherMeasurement.device_id == device_id,
+                WeatherMeasurement.timestamp >= latest["timestamp"] - tolerance,
+                WeatherMeasurement.timestamp <= latest["timestamp"] + tolerance,
+            )
+            .order_by(WeatherMeasurement.timestamp)
+            .all()
+        )
+        bias = analytics_client.latest_bias(
+            [
+                {
+                    "timestamp": record.timestamp,
+                    "temperature": float(record.temperature),
+                    "humidity": float(record.humidity),
+                    "pressure": float(record.pressure),
+                }
+                for record in iot
+            ],
+            [latest],
+            tolerance_minutes=5,
+            min_samples=3,
+        )
+    return BenchmarkResponse(
+        device_id=device_id,
+        source=source,
+        hours=hours,
+        reference=reference,
+        latest_bias=bias,
+    )

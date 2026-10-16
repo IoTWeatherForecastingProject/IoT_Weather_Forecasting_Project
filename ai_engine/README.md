@@ -90,10 +90,16 @@ ai_engine/
    - Sử dụng **Isotonic Regression** hoặc **Platt Scaling** (`CalibratedClassifierCV`).
    - Đánh giá bằng **Brier Score** ($< 0.15$) và vẽ đường cong **Calibration Curve**.
 3. **Phát hiện Bất thường Cảm biến (`sensor_analytics/`):**
-   - Bắt các spike phi lý (Nhiệt độ $> 55^\circ$C hoặc Áp suất $< 900$ hPa).
-   - Bắt lỗi kẹt nước (Frozen value): Cảm biến mưa báo ướt liên tục quá 6 tiếng khi độ ẩm môi trường đã giảm xuống dưới 65%.
+   - Bản ghi đơn lẻ: thiếu giá trị, vượt giới hạn vật lý (5–55 °C, 10–100 %, 950–1050 hPa) và spike theo tốc độ thay đổi thực ($|\Delta x| / \max(\Delta t, 1\text{ phút})$; bỏ qua khi mất dữ liệu > 10 phút).
+   - Frozen value BME280: một đại lượng không đổi suốt 30 phút (bỏ qua độ ẩm bão hòa ≥ 99%).
+   - Đọng nước cảm biến mưa: báo ướt ở mọi mẫu trong 6 giờ, độ ẩm trung bình < 65% và áp suất không giảm quá 0.5 hPa.
+   - Mọi cửa sổ tính theo `timestamp`, không theo số dòng. `SensorAnomalyDetector.analyze(df)` trả báo cáo tổng hợp `status` = `OK` / `WARNING` / `FAULT` cho Dashboard. Ngưỡng cấu hình qua `AnomalyConfig`.
 4. **Đối chuẩn Khí tượng (`openweather_benchmark/`):**
-   - Định kỳ lấy dữ liệu OpenWeatherMap tại cùng tọa độ trạm đo để phân tích Mean Bias Error (MBE).
+   - Thu thập Open-Meteo hiện tại/lịch sử 1–92 ngày và OpenWeather hiện tại (khi có `OPENWEATHER_API_KEY`) tại cùng tọa độ trạm đo. Các tham số đã đối chiếu với [tài liệu Open-Meteo](https://open-meteo.com/en/docs).
+   - Chuẩn hóa `source, timestamp, lat, lon, temperature, humidity, pressure, precipitation`; timestamp dữ liệu từ nguồn được lưu UTC, áp suất dùng `surface_pressure` hoặc ưu tiên `grnd_level` của OpenWeather. Dữ liệu Open-Meteo là dữ liệu mô hình, không phải phép đo trực tiếp tại trạm.
+   - Giá trị `source`: `open-meteo` (theo giờ, từ `--backfill-days`), `open-meteo-15min` (giá trị 15 phút, từ `--once`/`--loop`), `openweather`. Hai độ phân giải của Open-Meteo được tách để không ghi đè nhau ở các mốc giờ chẵn.
+   - Lưu CSV hoặc bảng `reference_weather`, khử trùng theo `(source, timestamp)`. Giữ `WeatherBenchmarkCrawler.calculate_sensor_bias()` để tương thích code cũ.
+   - Phân tích sai số (`bias_analysis.py`): với mỗi mốc tham chiếu $t$, lấy trung bình IoT trong $[t-5\text{m}, t+5\text{m}]$ (riêng từng biến, cần ≥ 3 mẫu). Sai số $e = \text{IoT} - \text{ref}$; báo cáo `n`, MBE $=\bar e$, MAE, RMSE, độ lệch chuẩn của $e$, Pearson $r$, hồi quy hiệu chỉnh $\text{ref} \approx a\cdot\text{IoT} + b$, và MBE theo giờ trong ngày (Asia/Ho_Chi_Minh) để thấy ảnh hưởng của nắng lên hộp trạm. Không có dữ liệu chung → `reason` = `no_iot_data` / `no_reference_data` / `no_overlap`.
 
 ---
 
@@ -147,6 +153,40 @@ python rain_classification/train_rain.py
 
 # 3. Chạy kiểm thử hàm suy luận hợp nhất (TV2 & TV3)
 python inference/unified_forecast.py
+
+# 4. Unit test (dữ liệu tổng hợp, không dùng làm kết quả thực nghiệm)
+python -m pytest
+
+# 5. Crawler tham chiếu: CSV không cần DB hoặc OpenWeather key
+python -m openweather_benchmark.crawler --once --csv data/processed/reference.csv
+python -m openweather_benchmark.crawler --loop --interval 900 --source open-meteo --csv data/processed/reference.csv
+
+# Áp dụng backend/migrations/002_reference_weather.sql trước khi lưu PostgreSQL
+# DATABASE_URL ưu tiên biến môi trường, sau đó backend/.env
+python -m openweather_benchmark.crawler --backfill-days 2
+python -m openweather_benchmark.crawler --once
+
+# 6. Phân tích sai số IoT vs tham chiếu (mặc định đọc DB; hoặc dùng CSV)
+python -m openweather_benchmark.bias_analysis --device-id station01 --source open-meteo
+python -m openweather_benchmark.bias_analysis --iot-csv data/raw/station01.csv --ref-csv data/processed/reference.csv
+#    Tùy chọn: --start/--end (ISO-8601), --tolerance-minutes 5, --min-samples 3, --out-dir
+#    Kết quả: reports/benchmark/<device>_<source>/bias_summary.json, aligned_pairs.csv, scatter_*.png, timeseries_*.png, diurnal_bias.png
+```
+
+Chọn đúng một trong `--once`, `--loop`, `--backfill-days N`; `--interval` chỉ dùng
+với `--loop`. Tọa độ mặc định `10.762622, 106.660172`, thay bằng `--lat`/`--lon`.
+`--source` nhận `all` (mặc định), `open-meteo`, `openweather`; không có key thì bỏ
+qua OpenWeather. Backfill chỉ lấy Open-Meteo vì endpoint OpenWeather hiện tại
+không cung cấp lịch sử. Mỗi yêu cầu có tổng cộng 4 lần thử (timeout 10 giây), chờ
+2/4/8 giây giữa các lần; lỗi 4xx (trừ 429) dừng ngay. Kết nối DB có `connect_timeout`
+10 giây. Ở `--once`/`--backfill-days`, exit code 1 khi không lấy được bản ghi nào hoặc
+lưu thất bại (log nêu rõ nguyên nhân, đã ẩn mật khẩu); `--loop` ghi log rồi chạy tiếp.
+
+Nâng cấp dữ liệu đã crawl trước khi tách `open-meteo-15min` (chạy một lần):
+
+```sql
+UPDATE reference_weather SET source = 'open-meteo-15min'
+WHERE source = 'open-meteo' AND date_part('minute', timestamp) <> 0;
 ```
 
 ---
