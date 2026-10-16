@@ -96,7 +96,8 @@ ai_engine/
    - Thu thập Open-Meteo hiện tại/lịch sử 1–92 ngày và OpenWeather hiện tại (khi có `OPENWEATHER_API_KEY`) tại cùng tọa độ trạm đo. Các tham số đã đối chiếu với [tài liệu Open-Meteo](https://open-meteo.com/en/docs).
    - Chuẩn hóa `source, timestamp, lat, lon, temperature, humidity, pressure, precipitation`; timestamp dữ liệu từ nguồn được lưu UTC, áp suất dùng `surface_pressure` hoặc ưu tiên `grnd_level` của OpenWeather. Dữ liệu Open-Meteo là dữ liệu mô hình, không phải phép đo trực tiếp tại trạm.
    - Giá trị `source`: `open-meteo` (theo giờ, từ `--backfill-days`), `open-meteo-15min` (giá trị 15 phút, từ `--once`/`--loop`), `openweather`. Hai độ phân giải của Open-Meteo được tách để không ghi đè nhau ở các mốc giờ chẵn.
-   - Lưu CSV hoặc bảng `reference_weather`, khử trùng theo `(source, timestamp)`. Giữ `WeatherBenchmarkCrawler.calculate_sensor_bias()` để phân tích Mean Bias Error (MBE).
+   - Lưu CSV hoặc bảng `reference_weather`, khử trùng theo `(source, timestamp)`. Giữ `WeatherBenchmarkCrawler.calculate_sensor_bias()` để tương thích code cũ.
+   - Phân tích sai số (`bias_analysis.py`): với mỗi mốc tham chiếu $t$, lấy trung bình IoT trong $[t-5\text{m}, t+5\text{m}]$ (riêng từng biến, cần ≥ 3 mẫu). Sai số $e = \text{IoT} - \text{ref}$; báo cáo `n`, MBE $=\bar e$, MAE, RMSE, độ lệch chuẩn của $e$, Pearson $r$, hồi quy hiệu chỉnh $\text{ref} \approx a\cdot\text{IoT} + b$, và MBE theo giờ trong ngày (Asia/Ho_Chi_Minh) để thấy ảnh hưởng của nắng lên hộp trạm. Không có dữ liệu chung → `reason` = `no_iot_data` / `no_reference_data` / `no_overlap`.
 
 ---
 
@@ -151,7 +152,10 @@ python rain_classification/train_rain.py
 # 3. Chạy kiểm thử hàm suy luận hợp nhất (TV2 & TV3)
 python inference/unified_forecast.py
 
-# 4. Crawler tham chiếu: CSV không cần DB hoặc OpenWeather key
+# 4. Unit test (dữ liệu tổng hợp, không dùng làm kết quả thực nghiệm)
+python -m pytest
+
+# 5. Crawler tham chiếu: CSV không cần DB hoặc OpenWeather key
 python -m openweather_benchmark.crawler --once --csv data/processed/reference.csv
 python -m openweather_benchmark.crawler --loop --interval 900 --source open-meteo --csv data/processed/reference.csv
 
@@ -159,6 +163,12 @@ python -m openweather_benchmark.crawler --loop --interval 900 --source open-mete
 # DATABASE_URL ưu tiên biến môi trường, sau đó backend/.env
 python -m openweather_benchmark.crawler --backfill-days 2
 python -m openweather_benchmark.crawler --once
+
+# 6. Phân tích sai số IoT vs tham chiếu (mặc định đọc DB; hoặc dùng CSV)
+python -m openweather_benchmark.bias_analysis --device-id station01 --source open-meteo
+python -m openweather_benchmark.bias_analysis --iot-csv data/raw/station01.csv --ref-csv data/processed/reference.csv
+#    Tùy chọn: --start/--end (ISO-8601), --tolerance-minutes 5, --min-samples 3, --out-dir
+#    Kết quả: reports/benchmark/<device>_<source>/bias_summary.json, aligned_pairs.csv, scatter_*.png, timeseries_*.png, diurnal_bias.png
 ```
 
 Chọn đúng một trong `--once`, `--loop`, `--backfill-days N`; `--interval` chỉ dùng
