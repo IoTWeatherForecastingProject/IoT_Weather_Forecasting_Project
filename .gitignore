@@ -83,6 +83,8 @@ ai_engine/data/raw/*
 !ai_engine/data/raw/.gitkeep
 ai_engine/data/processed/*
 !ai_engine/data/processed/.gitkeep
+# Báo cáo đánh giá sinh tự động khi chạy train (JSON, PNG); kết quả chính thức đưa vào docs/reports/
+ai_engine/reports/
 
 # Model weights nặng (PyTorch, TensorFlow, Pickle, Joblib, ONNX > 20MB)
 # Khuyến khích quản lý model weights qua Git LFS / DVC hoặc Google Drive release
