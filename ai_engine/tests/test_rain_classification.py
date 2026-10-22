@@ -293,8 +293,13 @@ def test_model_rejects_incomplete_features(trained):
         model.predict_proba(feat[payload["feature_cols"][:-1]].iloc[[-1]])
 
 
-def test_unified_forecast_uses_new_artifact(trained, monkeypatch, tmp_path):
-    """Định dạng artifact mới vẫn dùng được với inference/unified_forecast.py hiện tại (TV2)."""
+# ------------------------------------------------------------------------------
+# Tích hợp inference/unified_forecast.py
+# ------------------------------------------------------------------------------
+
+@pytest.fixture
+def uf_with_rain(trained, monkeypatch, tmp_path):
+    """unified_forecast với artifact mưa tổng hợp, không có model nhiệt độ."""
     import inference.unified_forecast as uf
 
     payload, _ = trained
@@ -302,13 +307,64 @@ def test_unified_forecast_uses_new_artifact(trained, monkeypatch, tmp_path):
     monkeypatch.setattr(uf, "RAIN_MODEL_PATH", tmp_path / "missing_rain.joblib")
     monkeypatch.setattr(uf, "_temp_payload", None)
     monkeypatch.setattr(uf, "_rain_payload", payload)
+    return uf, payload
 
+
+def _expected_model_prob(payload, recent, h):
+    feat = extract_rain_features(resample_to_grid(recent))
+    X = feat[payload["feature_cols"]].iloc[[-1]]
+    return round(float(payload["models"][f"rain_{h}m"].predict_proba(X)[0, 1]), 2)
+
+
+def test_unified_forecast_uses_training_feature_pipeline(uf_with_rain):
+    uf, payload = uf_with_rain
     recent = make_synthetic_weather(days=1, seed=2).tail(payload["recommended_history_minutes"])
     result = uf.predict_forecast(recent)
-
-    clean = uf.TimeSeriesPreprocessor(freq="1min").clean_and_resample(recent)
-    X = extract_rain_features(clean)[payload["feature_cols"]].iloc[[-1]]
     for h in (10, 30, 60):
-        expected = round(float(payload["models"][f"rain_{h}m"].predict_proba(X)[0, 1]), 2)
-        assert result[f"plus_{h}m"]["rain_probability"] == expected
-        assert 0.0 <= expected <= 1.0
+        assert result[f"plus_{h}m"]["rain_source"] == "model"
+        assert result[f"plus_{h}m"]["rain_probability"] == _expected_model_prob(payload, recent, h)
+
+
+def test_unified_forecast_keeps_valid_horizons_when_one_is_missing(uf_with_rain, monkeypatch):
+    uf, payload = uf_with_rain
+    partial = dict(payload, models={k: v for k, v in payload["models"].items() if k != "rain_10m"})
+    monkeypatch.setattr(uf, "_rain_payload", partial)
+    recent = make_synthetic_weather(days=1, seed=2).tail(payload["recommended_history_minutes"])
+    result = uf.predict_forecast(recent)
+    assert result["plus_10m"]["rain_source"] == "heuristic"
+    for h in (30, 60):
+        assert result[f"plus_{h}m"]["rain_source"] == "model"
+        assert result[f"plus_{h}m"]["rain_probability"] == _expected_model_prob(payload, recent, h)
+
+
+def test_unified_forecast_short_history_falls_back_without_crash(uf_with_rain, caplog):
+    uf, _ = uf_with_rain
+    recent = make_synthetic_weather(days=1, seed=2).tail(30)  # 30 phút < min_history_minutes
+    result = uf.predict_forecast(recent)
+    for h in (10, 30, 60):
+        assert result[f"plus_{h}m"]["rain_source"] == "heuristic"
+        assert 0.0 <= result[f"plus_{h}m"]["rain_probability"] <= 1.0
+    assert "NaN" in caplog.text
+
+
+def test_unified_forecast_alert_uses_threshold(uf_with_rain):
+    uf, payload = uf_with_rain
+    recent = make_synthetic_weather(days=1, seed=2).tail(payload["recommended_history_minutes"])
+    max_prob = max(uf.predict_forecast(recent)[f"plus_{h}m"]["rain_probability"] for h in (10, 30, 60))
+    assert uf.predict_forecast(recent, threshold=0.0)["alert_triggered"] is True
+    if max_prob < 1.0:
+        assert uf.predict_forecast(recent, threshold=1.0)["alert_triggered"] is False
+    with pytest.raises(ValueError, match="threshold"):
+        uf.predict_forecast(recent, threshold=1.5)
+
+
+def test_unified_forecast_uses_only_latest_device(uf_with_rain):
+    uf, payload = uf_with_rain
+    recent = make_synthetic_weather(days=1, seed=2).tail(payload["recommended_history_minutes"])
+    other = make_synthetic_weather(days=1, seed=3).tail(payload["recommended_history_minutes"])
+    other = other.assign(device_id="other01", pressure=other["pressure"] - 50)
+    mixed = pd.concat([other, recent]).sort_values("timestamp", kind="stable")
+    result = uf.predict_forecast(mixed)
+    assert result["device_id"] == "synthetic01"
+    for h in (10, 30, 60):
+        assert result[f"plus_{h}m"]["rain_probability"] == _expected_model_prob(payload, recent, h)
