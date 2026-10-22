@@ -27,14 +27,14 @@
         }
     </script>
     <!-- ApexCharts CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1/dist/apexcharts.min.js"></script>
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body class="bg-[#090d16] text-slate-100 min-h-screen">
 
     <!-- Top Navigation / SCADA Header -->
     <header class="border-b border-slate-800 bg-[#0d1322]/80 backdrop-blur sticky top-0 z-50">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 min-h-16 py-2 flex flex-wrap items-center justify-between gap-2">
             <div class="flex items-center space-x-3">
                 <div class="w-9 h-9 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -54,14 +54,15 @@
                 <!-- Status Badge -->
                 <div class="flex items-center space-x-2 bg-slate-900/80 px-3 py-1.5 rounded-full border border-slate-800 text-xs font-mono">
                     <span class="relative flex h-2.5 w-2.5">
-                        <span class="pulse-indicator absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" id="status-ping"></span>
-                        <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" id="status-dot"></span>
+                        <span class="hidden" id="status-ping"></span>
+                        <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" id="status-dot"></span>
                     </span>
-                    <span id="connection-status" class="text-emerald-400">WS CONNECTED</span>
+                    <span id="connection-status" class="text-amber-400">CONNECTING...</span>
                 </div>
+                <span id="backend-status" class="hidden text-xs font-mono px-2 py-1 rounded bg-rose-500/10 text-rose-400 border border-rose-500/30">MẤT KẾT NỐI BACKEND</span>
 
                 <!-- Clock -->
-                <div class="text-xs font-mono text-slate-400 hidden sm:block" id="live-clock">--:--:-- UTC</div>
+                <div class="text-xs font-mono text-slate-400 hidden sm:block" id="live-clock">--:--:--</div>
             </div>
         </div>
     </header>
@@ -96,8 +97,8 @@
                     <span class="text-sm font-semibold text-slate-400">°C</span>
                 </div>
                 <div class="mt-3 text-xs text-slate-400 flex items-center justify-between">
-                    <span>Sai lệch vs OpenWeather:</span>
-                    <span class="font-mono text-cyan-400" id="bias-temp">±0.0°C</span>
+                    <span>Sai lệch vs tham chiếu:</span>
+                    <span class="font-mono text-slate-500" id="bias-temp" title="IoT - tham chiếu tại mốc tham chiếu gần nhất; N/A = chưa có dữ liệu đối chuẩn">--</span>
                 </div>
             </div>
 
@@ -114,7 +115,7 @@
                     <span class="text-sm font-semibold text-slate-400">%</span>
                 </div>
                 <div class="mt-3 w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                    <div class="bg-blue-500 h-1.5 rounded-full transition-all duration-500" id="bar-hum" style="width: 50%"></div>
+                    <div class="bg-blue-500 h-1.5 rounded-full transition-all duration-500" id="bar-hum" style="width: 0%"></div>
                 </div>
             </div>
 
@@ -131,8 +132,8 @@
                     <span class="text-sm font-semibold text-slate-400">hPa</span>
                 </div>
                 <div class="mt-3 text-xs text-slate-400 flex items-center justify-between">
-                    <span>Xu hướng:</span>
-                    <span class="font-mono text-emerald-400" id="trend-press">Ổn định</span>
+                    <span>Xu hướng 60 phút:</span>
+                    <span class="font-mono text-slate-500" id="trend-press">--</span>
                 </div>
             </div>
 
@@ -145,7 +146,7 @@
                     </span>
                 </div>
                 <div class="flex items-baseline space-x-2">
-                    <span class="text-2xl font-bold font-mono text-emerald-400" id="card-rain-status">KHÔ RÁO</span>
+                    <span class="text-2xl font-bold font-mono text-slate-500" id="card-rain-status">--</span>
                 </div>
                 <div class="mt-3 text-xs text-slate-400 flex items-center justify-between">
                     <span>Giá trị ADC thô:</span>
@@ -158,16 +159,39 @@
         <!-- Middle Section: Chart & Forecast Cards -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-            <!-- Realtime Comparative Chart (2 cols) -->
-            <div class="scada-card rounded-2xl p-6 lg:col-span-2 space-y-4">
-                <div class="flex items-center justify-between">
+            <!-- Left column: chart + sensor health (2 cols) -->
+            <div class="lg:col-span-2 space-y-6 min-w-0">
+
+            <!-- Realtime Comparative Chart -->
+            <div class="scada-card rounded-2xl p-4 sm:p-6 space-y-4">
+                <div class="flex flex-wrap items-start justify-between gap-3">
                     <div>
                         <h2 class="text-base font-bold text-slate-100 tracking-wide">Chuỗi Thời Gian & Đối Chuẩn Khí Tượng</h2>
-                        <p class="text-xs text-slate-400">So sánh số liệu thực tế từ trạm đo IoT với dữ liệu trạm OpenWeatherMap</p>
+                        <p class="text-xs text-slate-400">2 giờ gần nhất của trạm IoT so với dữ liệu tham chiếu Open-Meteo (theo giờ)</p>
                     </div>
-                    <span class="text-xs font-mono px-2 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700">Realtime Stream</span>
+                    <div class="flex rounded-lg border border-slate-700 overflow-hidden text-xs font-mono" role="tablist" id="chart-tabs">
+                        <button type="button" data-var="temperature" class="chart-tab px-3 py-1.5" role="tab">Nhiệt độ</button>
+                        <button type="button" data-var="humidity" class="chart-tab px-3 py-1.5 border-l border-slate-700" role="tab">Độ ẩm</button>
+                        <button type="button" data-var="pressure" class="chart-tab px-3 py-1.5 border-l border-slate-700" role="tab">Áp suất</button>
+                    </div>
                 </div>
                 <div id="weather-chart" class="w-full h-72"></div>
+                <p class="text-xs text-slate-500" id="chart-note">Đang tải lịch sử...</p>
+            </div>
+
+            <!-- Sensor Health (SA-03) -->
+            <div class="scada-card rounded-2xl p-4 sm:p-6 space-y-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                        <h2 class="text-base font-bold text-slate-100 tracking-wide">Sức Khỏe Cảm Biến</h2>
+                        <p class="text-xs text-slate-400">Spike, giá trị kẹt (BME280), đọng nước cảm biến mưa — cửa sổ 6 giờ</p>
+                    </div>
+                    <span id="health-badge" class="text-xs font-mono font-bold px-2.5 py-1 rounded-full border bg-slate-800 text-slate-400 border-slate-700">UNKNOWN</span>
+                </div>
+                <ul id="health-list" class="space-y-2 text-sm"></ul>
+                <p class="text-xs text-slate-500" id="health-note">Đang kiểm tra...</p>
+            </div>
+
             </div>
 
             <!-- Short-Term AI Forecasting Panel (1 col) -->
@@ -176,6 +200,7 @@
                     <div>
                         <h2 class="text-base font-bold text-slate-100 tracking-wide">Dự Báo Ngắn Hạn AI</h2>
                         <p class="text-xs text-slate-400">Mô hình Hồi quy + Phân loại hiệu chuẩn</p>
+                        <p class="text-xs text-slate-500 font-mono" id="fc-updated">Chưa có dự báo</p>
                     </div>
                     <button id="btn-refresh-forecast" class="text-xs text-cyan-400 hover:text-cyan-300 transition-colors flex items-center gap-1">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
@@ -188,7 +213,7 @@
                     <!-- +10 min -->
                     <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
                         <div class="flex justify-between items-center mb-1">
-                            <span class="text-xs font-mono text-cyan-400 font-bold">+10 PHÚT</span>
+                            <span class="text-xs font-mono text-cyan-400 font-bold">+10 PHÚT <span id="fc-src-10" class="hidden ml-1 px-1.5 py-0.5 rounded text-[10px] font-normal border"></span></span>
                             <span class="text-sm font-bold font-mono text-slate-200" id="fc-temp-10">--.- °C</span>
                         </div>
                         <div class="flex justify-between items-center text-xs text-slate-400 mb-1.5">
@@ -196,14 +221,14 @@
                             <span class="font-mono text-slate-200" id="fc-rain-10">--%</span>
                         </div>
                         <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
-                            <div class="bg-cyan-500 h-2 rounded-full transition-all duration-500" id="fc-bar-10" style="width: 20%"></div>
+                            <div class="bg-cyan-500 h-2 rounded-full transition-all duration-500" id="fc-bar-10" style="width: 0%"></div>
                         </div>
                     </div>
 
                     <!-- +30 min -->
                     <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
                         <div class="flex justify-between items-center mb-1">
-                            <span class="text-xs font-mono text-cyan-400 font-bold">+30 PHÚT</span>
+                            <span class="text-xs font-mono text-cyan-400 font-bold">+30 PHÚT <span id="fc-src-30" class="hidden ml-1 px-1.5 py-0.5 rounded text-[10px] font-normal border"></span></span>
                             <span class="text-sm font-bold font-mono text-slate-200" id="fc-temp-30">--.- °C</span>
                         </div>
                         <div class="flex justify-between items-center text-xs text-slate-400 mb-1.5">
@@ -211,14 +236,14 @@
                             <span class="font-mono text-slate-200" id="fc-rain-30">--%</span>
                         </div>
                         <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
-                            <div class="bg-amber-500 h-2 rounded-full transition-all duration-500" id="fc-bar-30" style="width: 45%"></div>
+                            <div class="bg-amber-500 h-2 rounded-full transition-all duration-500" id="fc-bar-30" style="width: 0%"></div>
                         </div>
                     </div>
 
                     <!-- +60 min -->
                     <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
                         <div class="flex justify-between items-center mb-1">
-                            <span class="text-xs font-mono text-cyan-400 font-bold">+60 PHÚT</span>
+                            <span class="text-xs font-mono text-cyan-400 font-bold">+60 PHÚT <span id="fc-src-60" class="hidden ml-1 px-1.5 py-0.5 rounded text-[10px] font-normal border"></span></span>
                             <span class="text-sm font-bold font-mono text-slate-200" id="fc-temp-60">--.- °C</span>
                         </div>
                         <div class="flex justify-between items-center text-xs text-slate-400 mb-1.5">
@@ -226,7 +251,7 @@
                             <span class="font-mono text-slate-200" id="fc-rain-60">--%</span>
                         </div>
                         <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
-                            <div class="bg-rose-500 h-2 rounded-full transition-all duration-500" id="fc-bar-60" style="width: 75%"></div>
+                            <div class="bg-rose-500 h-2 rounded-full transition-all duration-500" id="fc-bar-60" style="width: 0%"></div>
                         </div>
                     </div>
                 </div>
@@ -236,13 +261,14 @@
                     <span class="text-xs font-semibold uppercase tracking-wider text-slate-400 block">Điều Khiển Ngưỡng Cảnh Báo Phản Hồi</span>
                     <div class="flex items-center justify-between text-xs font-mono">
                         <span class="text-slate-400">Ngưỡng mưa kích hoạt còi:</span>
-                        <span class="text-cyan-400 font-bold text-sm" id="threshold-val">70%</span>
+                        <span class="text-cyan-400 font-bold text-sm" id="threshold-val">--</span>
                     </div>
-                    <input type="range" min="40" max="95" value="70" step="5" class="w-full accent-cyan-400 cursor-pointer" id="threshold-slider">
+                    <input type="range" min="40" max="95" value="70" step="5" aria-label="Ngưỡng cảnh báo mưa" class="w-full accent-cyan-400 cursor-pointer" id="threshold-slider">
                     <button id="btn-save-threshold" class="w-full py-2 px-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 text-xs font-semibold tracking-wider text-white transition-all shadow-lg shadow-cyan-900/30">
                         CẬP NHẬT XUỐNG SERVER
                     </button>
-                    <span id="threshold-status" class="text-xs text-center block text-slate-400"></span>
+                    <span id="threshold-applied" class="text-xs text-center block text-slate-500 font-mono">Đang đọc ngưỡng từ server...</span>
+                    <span id="threshold-status" class="text-xs text-center block text-slate-400" role="status"></span>
                 </div>
 
             </div>
