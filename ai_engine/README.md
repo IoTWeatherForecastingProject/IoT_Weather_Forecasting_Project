@@ -94,8 +94,10 @@ ai_engine/
    - Sử dụng **Platt Scaling (sigmoid)** hoặc **Isotonic Regression**, fit trên tập calibration tách theo thời gian (xem mục 4.1).
    - Đánh giá bằng **Brier Score**, Brier Skill Score so với baseline và **Reliability Diagram**.
 3. **Phát hiện Bất thường Cảm biến (`sensor_analytics/`):**
-   - Bắt các spike phi lý (Nhiệt độ $> 55^\circ$C hoặc Áp suất $< 900$ hPa).
-   - Bắt lỗi kẹt nước (Frozen value): Cảm biến mưa báo ướt liên tục quá 6 tiếng khi độ ẩm môi trường đã giảm xuống dưới 65%.
+   - Bản ghi đơn lẻ: thiếu giá trị, vượt giới hạn vật lý (5–55 °C, 10–100 %, 950–1050 hPa) và spike theo tốc độ thay đổi thực ($|\Delta x| / \max(\Delta t, 1\text{ phút})$; bỏ qua khi mất dữ liệu > 10 phút).
+   - Frozen value BME280: một đại lượng không đổi suốt 30 phút (bỏ qua độ ẩm bão hòa ≥ 99%).
+   - Đọng nước cảm biến mưa: báo ướt ở mọi mẫu trong 6 giờ, độ ẩm trung bình < 65% và áp suất không giảm quá 0.5 hPa.
+   - Mọi cửa sổ tính theo `timestamp`, không theo số dòng. `SensorAnomalyDetector.analyze(df)` trả báo cáo tổng hợp `status` = `OK` / `WARNING` / `FAULT` cho Dashboard. Ngưỡng cấu hình qua `AnomalyConfig`.
 4. **Đối chuẩn Khí tượng (`openweather_benchmark/`):**
    - Định kỳ lấy dữ liệu OpenWeatherMap tại cùng tọa độ trạm đo để phân tích Mean Bias Error (MBE).
 
