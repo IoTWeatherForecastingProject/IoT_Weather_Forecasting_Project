@@ -80,10 +80,59 @@ ON weather_measurements (device_id, timestamp DESC);
 |---|---|---|---|
 | `GET` | `/api/weather/current` | Lấy bản ghi thời tiết mới nhất của trạm | `{ "temperature": 31.2, "humidity": 78, "pressure": 1005.8 }` |
 | `GET` | `/api/weather/history?limit=100` | Lấy dữ liệu lịch sử để vẽ biểu đồ | Mảng JSON các điểm dữ liệu gần nhất |
-| `GET` | `/api/weather/forecast` | Trả về kết quả dự báo (+10m, +30m, +60m) | `{ "temperature_forecast": {...}, "rain_probability": {...} }` |
+| `GET` | `/api/weather/forecast` | Dự báo từ lịch sử 76 phút của một trạm; 404 nếu không có mẫu gần đây | `plus_10m`, `plus_30m`, `plus_60m` (nhiệt độ, xác suất và nguồn mưa), metadata lịch sử và ngưỡng |
 | `POST` | `/api/weather/alerts/threshold` | Cập nhật ngưỡng cảnh báo mưa 2 chiều | `{ "threshold": 0.65, "status": "updated" }` |
 | `GET` | `/api/health` | Kiểm tra trạng thái Database & MQTT | `{ "database": "connected", "mqtt": "online" }` |
 | `WebSocket`| `/ws/weather/live` | Stream đẩy dữ liệu realtime mỗi 5s | Đẩy payload JSON ngay khi nhận từ MQTT |
+
+---
+
+### Hành vi `/api/weather/forecast` (BE-05)
+
+- Lấy **toàn bộ mẫu trong 76 phút gần nhất tính đến thời điểm gọi**, không giới hạn 30 bản ghi. Chỉ dùng một trạm, sắp xếp thời gian từ cũ đến mới và bỏ mẫu có timestamp tương lai.
+- Truyền `?device_id=station01` để chọn trạm. Nếu không truyền, chọn trạm có mẫu mới nhất trong cửa sổ 76 phút; lịch sử của các trạm khác không được trộn vào inference.
+- Nếu trạm không có mẫu trong cửa sổ này, trả **404** với `detail.code = "no_recent_measurements"`. API không tạo dự báo từ số liệu mặc định khi DB trống hoặc chỉ còn dữ liệu cũ.
+- Đọc `rain_alert_threshold` từ `system_config` trước khi gọi AI; nếu chưa có cấu hình DB thì dùng `RAIN_ALERT_THRESHOLD` trong môi trường. Ngưỡng này dùng chung cho inference, `alert_triggered` và AlertService. `rain_level` vẫn là các mức mô tả cố định Low/Medium/High của inference.
+- Mỗi horizon `plus_10m`, `plus_30m`, `plus_60m` có `rain_source` bằng `model` hoặc `heuristic`. Giữ nguồn riêng từng horizon; thiếu model/lịch sử một horizon không làm mất dự báo model hợp lệ của horizon khác. Fallback cục bộ cũng trả `rain_source=heuristic`.
+- Phản hồi bổ sung `history_window_minutes`, `history_span_minutes`, `history_measurements` và `rain_alert_threshold` để kiểm tra đầu vào. `history_span_minutes` chỉ là khoảng cách giữa mẫu đầu/cuối, không chứng minh chuỗi liên tục hoặc model đủ feature.
+- Model mưa hiện cần tối thiểu 61 phút lịch sử, khuyến nghị 76 phút. Khi thiếu lịch sử hoặc weights, inference có thể dùng heuristic; **HTTP 200 không chứng minh đang chạy model đã huấn luyện**.
+
+Các bài kiểm thử hợp đồng BE-05 dùng DB SQLite riêng, không sửa dữ liệu hay ngưỡng trên PostgreSQL đang thu thập:
+
+```powershell
+# Chạy từ thư mục backend
+& .venv/Scripts/python.exe -m pytest -q tests/test_forecast.py
+```
+
+### Cảnh báo hai chiều và tác vụ nền (BE-06)
+
+- API `/forecast` và tác vụ nền dùng chung `services/weather_forecast.py`, cùng ngưỡng DB và MQTT client đang chạy trong `app.state.mqtt_worker`.
+- Tác vụ nền tự chạy theo lifespan FastAPI, mặc định **30 giây/lần**, không cần mở Dashboard. DB và inference chạy ở thread riêng; lỗi một trạm không dừng đánh giá các trạm khác. Khi shutdown, tác vụ dừng trước MQTT worker.
+- Chỉ phát lệnh từ mẫu mới trong **120 giây** gần nhất. Vẫn có thể xem dự báo từ lịch sử cũ hơn trong cửa sổ 76 phút, nhưng không kích hoạt ngoại vi từ dữ liệu đó. `/api/health` có `alert_monitor_running` để kiểm tra tác vụ.
+- Topic mặc định là `weather/{device_id}/alert`, thay `{device_id}` bằng đúng mã trạm. Cấu hình cũ `weather/station01/alert` được nhận diện như mẫu mặc định để không gửi nhầm cảnh báo trạm mô phỏng tới `station01`. Topic tùy chỉnh khác vẫn được giữ nguyên; có thể dùng `{device_id}` trong mẫu tùy chỉnh.
+- Gửi QoS 1, **không retained**. `mqtt_sent=true` chỉ sau khi nhận PUBACK trong thời gian chờ; publish bị từ chối, mất kết nối hoặc hết thời gian đều ghi false. PUBACK chứng minh broker đã nhận, chưa chứng minh còi/relay vật lý đã chạy.
+- Cooldown mặc định **180 giây theo từng trạm và từng kênh**. API và tác vụ nền không thể đồng thời phát hai lệnh cho cùng trạm. Kênh thất bại được thử lại mà không gửi lặp kênh đã thành công. Các lần bị cooldown không tạo log cảnh báo mới.
+- `alert_logs.notes` ghi trạng thái kênh (`acknowledged`, `failed`, `unavailable`, `cooldown`, `disabled`). `alert_triggered` trong forecast là quyết định theo xác suất/ngưỡng, không phải biên nhận gửi thành công.
+- Telegram chỉ chạy khi được bật và có token/chat ID. Kiểm tra cả HTTP status và trường `ok` của Telegram; lỗi HTTP không ghi token vào log. Các bài test tự động dùng mock, không gửi tin thật.
+
+Cấu hình trong `.env` (file mẫu đã cập nhật):
+
+```ini
+MQTT_ALERT_TOPIC=weather/{device_id}/alert
+ALERT_COOLDOWN_SECONDS=180
+ALERT_MQTT_ACK_TIMEOUT_SECONDS=2
+ALERT_MONITOR_ENABLED=true
+ALERT_EVALUATION_INTERVAL_SECONDS=30
+ALERT_MAX_DATA_AGE_SECONDS=120
+```
+
+Cooldown hiện lưu trong bộ nhớ của **một tiến trình**, phù hợp lệnh uvicorn một worker của dự án; trạng thái được đặt lại khi restart. Cần lưu trạng thái/khóa dùng chung trước khi chạy nhiều worker hoặc nhiều instance. Chu kỳ 30 giây là thời gian chờ đánh giá tối đa thông thường, ngoài thời gian inference và gửi lệnh; đây không phải cam kết phản hồi dưới 2 giây từ lúc dữ liệu thay đổi.
+
+Kiểm thử ACK, cooldown, mất kết nối, thử lại, không chặn event loop và vòng đời tác vụ:
+
+```powershell
+& .venv/Scripts/python.exe -m pytest -q tests/test_alerts.py tests/test_forecast_monitor.py tests/test_forecast.py
+```
 
 ---
 

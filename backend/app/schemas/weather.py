@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
@@ -48,6 +48,7 @@ class ForecastHorizon(BaseModel):
     temperature_c: float = Field(..., description="Nhiệt độ dự báo (°C)", examples=[30.5])
     rain_probability: float = Field(..., description="Xác suất mưa dự báo (0.0 đến 1.0)", examples=[0.72])
     rain_level: str = Field(..., description="Mức độ mưa (Low, Medium, High)", examples=["High"])
+    rain_source: Literal["model", "heuristic"] = Field(..., description="Nguồn xác suất mưa: model đã huấn luyện hoặc heuristic")
 
     @field_validator("temperature_c", "rain_probability", mode="before")
     @classmethod
@@ -69,6 +70,10 @@ class ForecastResponse(BaseModel):
     plus_60m: ForecastHorizon = Field(..., description="Dự báo tại mốc +60 phút")
     alert_triggered: bool = Field(..., description="Cờ kích hoạt cảnh báo mưa 2 chiều", examples=[True])
     alert_message: Optional[str] = Field(None, description="Nội dung thông báo cảnh báo", examples=["Cảnh báo xác suất mưa cao trong 30-60 phút tới!"])
+    history_window_minutes: int = Field(..., description="Cửa sổ thời gian truy vấn lịch sử (phút)")
+    history_span_minutes: float = Field(..., description="Khoảng thời gian giữa mẫu đầu và cuối; không bảo đảm chuỗi không bị mất mẫu")
+    history_measurements: int = Field(..., description="Số mẫu của một trạm đã truyền vào inference")
+    rain_alert_threshold: float = Field(..., description="Ngưỡng dùng thống nhất cho inference và cảnh báo")
 
     @field_validator("current_temperature", "current_humidity", "current_pressure", mode="before")
     @classmethod
@@ -90,3 +95,4 @@ class HealthCheckResponse(BaseModel):
     database_connected: bool = Field(..., description="Trạng thái kết nối CSDL PostgreSQL", examples=[True])
     mqtt_connected: bool = Field(..., description="Trạng thái kết nối MQTT Broker", examples=[True])
     active_ws_clients: int = Field(0, description="Số lượng client WebSocket đang kết nối", examples=[2])
+    alert_monitor_running: bool = Field(False, description="Tác vụ đánh giá cảnh báo định kỳ đang chạy")

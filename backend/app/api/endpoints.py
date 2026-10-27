@@ -1,7 +1,7 @@
 import logging
 from typing import List, Optional
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
@@ -12,8 +12,7 @@ from app.schemas.weather import (
     ForecastResponse,
     ThresholdUpdateRequest
 )
-from app.services.forecast_client import ForecastClient
-from app.services.alert_service import AlertService
+from app.services.weather_forecast import build_forecast, NoRecentMeasurements
 
 router = APIRouter(prefix="/api/weather", tags=["Weather"])
 logger = logging.getLogger(__name__)
@@ -88,55 +87,29 @@ def get_weather_history(
     "/forecast",
     response_model=ForecastResponse,
     summary="Dự báo thời tiết ngắn hạn bằng AI Inference Engine",
-    description="Lấy cửa sổ trượt 30 điểm đo gần nhất từ CSDL truyền vào mô hình AI để dự báo nhiệt độ và xác suất mưa tại +10m, +30m, +60m. Tự động kích hoạt cơ chế phản hồi khép kín nếu xác suất mưa >= ngưỡng."
+    description="Lấy dữ liệu của một trạm trong 76 phút gần nhất, theo thứ tự thời gian, để dự báo +10m, +30m, +60m. Khi không truyền device_id, chọn trạm có mẫu mới nhất trong cửa sổ này. Trả 404 nếu không có mẫu; rain_source cho biết xác suất mưa từ model hay heuristic."
 )
 def get_weather_forecast(
-    device_id: Optional[str] = Query(None, description="Mã định danh trạm quan trắc (vd: station01)"),
+    request: Request,
+    device_id: Optional[str] = Query(None, min_length=1, max_length=50, description="Mã trạm; bỏ trống để chọn trạm có dữ liệu mới nhất"),
     db: Session = Depends(get_db)
 ):
     """Gọi AI Inference Engine dự báo nhiệt độ và xác suất mưa tại +10m, +30m, +60m."""
-    # Lấy cửa sổ trượt 30 bản ghi gần nhất để làm feature lag
-    query = db.query(WeatherMeasurement)
-    if device_id:
-        query = query.filter(WeatherMeasurement.device_id == device_id)
-    records = query.order_by(desc(WeatherMeasurement.timestamp)).limit(30).all()
-
-    measurements = [
-        {
-            "device_id": r.device_id,
-            "timestamp": r.timestamp,
-            "temperature": float(r.temperature),
-            "humidity": float(r.humidity),
-            "pressure": float(r.pressure),
-            "rain_raw": r.rain_raw,
-            "rain_detected": r.rain_detected
-        }
-        for r in reversed(records)
-    ]
-
-    forecast_data = ForecastClient.get_forecast(measurements)
-
-    # Đọc cấu hình ngưỡng hiện tại
-    cfg = db.query(SystemConfig).filter(SystemConfig.config_key == "rain_alert_threshold").first()
-    current_threshold = float(cfg.config_value) if cfg else 0.70
-
-    # Kích hoạt Closed-loop alert nếu xác suất mưa >= ngưỡng
-    max_prob = max(
-        forecast_data["plus_10m"]["rain_probability"],
-        forecast_data["plus_30m"]["rain_probability"],
-        forecast_data["plus_60m"]["rain_probability"]
-    )
-    horizon = 30 if forecast_data["plus_30m"]["rain_probability"] == max_prob else (10 if forecast_data["plus_10m"]["rain_probability"] == max_prob else 60)
-    
-    # Kích hoạt phản hồi 2 chiều
-    AlertService.evaluate_and_trigger(
-        device_id=forecast_data["device_id"],
-        rain_probability=max_prob,
-        horizon_minutes=horizon,
-        threshold=current_threshold
-    )
-
-    return forecast_data
+    worker = getattr(request.app.state, "mqtt_worker", None)
+    try:
+        return build_forecast(
+            db, device_id=device_id, mqtt_client=worker.client if worker else None,
+            now=datetime.now(timezone.utc),
+        )
+    except NoRecentMeasurements as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "no_recent_measurements",
+                "device_id": exc.device_id,
+                "message": str(exc),
+            },
+        ) from exc
 
 
 @router.post(

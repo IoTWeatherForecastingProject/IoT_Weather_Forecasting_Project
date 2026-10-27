@@ -140,15 +140,29 @@ def test_get_weather_history_pagination_and_ordering():
             db.query(WeatherMeasurement).filter(WeatherMeasurement.device_id == device_id).delete()
 
 
-def test_get_forecast():
+def test_get_forecast(monkeypatch):
     """Kiểm tra endpoint /api/weather/forecast trả về dự báo 3 mốc."""
-    response = client.get("/api/weather/forecast")
-    assert response.status_code == 200
-    data = response.json()
-    assert "plus_10m" in data
-    assert "plus_30m" in data
-    assert "plus_60m" in data
-    assert "temperature_c" in data["plus_10m"]
-    assert "rain_probability" in data["plus_10m"]
-    assert "rain_level" in data["plus_10m"]
-    assert "alert_triggered" in data
+    device_id = "test_station_forecast_api"
+    monkeypatch.setattr("app.services.alert_service.AlertService.evaluate_and_trigger", lambda **kwargs: False)
+    with get_db_context() as db:
+        db.query(WeatherMeasurement).filter(WeatherMeasurement.device_id == device_id).delete()
+        db.add(WeatherMeasurement(
+            device_id=device_id, timestamp=datetime.now(timezone.utc),
+            temperature=Decimal("31.50"), humidity=Decimal("75.00"),
+            pressure=Decimal("1008.00"), rain_raw=750, rain_detected=0,
+        ))
+    try:
+        response = client.get("/api/weather/forecast", params={"device_id": device_id})
+        assert response.status_code == 200
+        data = response.json()
+        for horizon in ("plus_10m", "plus_30m", "plus_60m"):
+            assert "temperature_c" in data[horizon]
+            assert "rain_probability" in data[horizon]
+            assert "rain_level" in data[horizon]
+            assert data[horizon]["rain_source"] in ("model", "heuristic")
+        assert data["device_id"] == device_id
+        assert data["history_measurements"] == 1
+        assert "alert_triggered" in data
+    finally:
+        with get_db_context() as db:
+            db.query(WeatherMeasurement).filter(WeatherMeasurement.device_id == device_id).delete()
