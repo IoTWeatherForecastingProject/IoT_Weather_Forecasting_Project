@@ -1,0 +1,13 @@
+---
+description: TV1 uses one long-lived work branch before merging into develop
+alwaysApply: true
+---
+
+# Một nhánh làm việc cho Thành viên 1 (TV1)
+
+- Chỉ áp dụng cho công việc của TV1 trong dự án này, gồm firmware, IoT, backend và phần tích hợp TV1 phụ trách. Không thay đổi quy trình nhánh của TV2 hoặc TV3.
+- Nhánh làm việc duy nhất hiện tại của TV1 là `feature/tv1-iot-backend`. Tiếp tục mọi task TV1 trên nhánh này; không tạo nhánh mới cho từng mã IOT, BE hoặc SYS. Nếu người dùng chủ động đổi tên nhánh, dùng tên mới làm nhánh duy nhất.
+- Trước khi sửa mã TV1, kiểm tra nhánh đang dùng. Nếu đang ở nhánh khác, giữ an toàn mọi thay đổi chưa commit rồi quay về nhánh TV1 duy nhất.
+- Tạo các commit nhỏ, rõ nội dung và mã task trên cùng nhánh. Đồng bộ thay đổi từ `develop` vào nhánh này khi cần.
+- Khi phần việc sẵn sàng tích hợp, tạo PR từ nhánh TV1 duy nhất vào `develop` để nhóm review và merge. Không commit trực tiếp lên `develop` hoặc `main`.
+- Chỉ xóa nhánh TV1 cũ sau khi xác nhận mọi commit của nó đã nằm trong nhánh TV1 duy nhất. Không xóa `main`, `develop` hoặc nhánh của thành viên khác.
