@@ -38,8 +38,8 @@ flowchart TD
     end
 
     subgraph Communication["TẦNG TRUYỀN DẪN (TV1)"]
-        Payload -->|WiFi / MQTT QoS 1| Broker["MQTT Broker (Mosquitto / EMQX)"]
-        Broker -.->|Topic: weather/station01/alert| MCU
+        Payload -->|WiFi / MQTT QoS 0| Broker["MQTT Broker (Mosquitto / EMQX)"]
+        Broker -.->|QoS 1: weather/station01/alert| MCU
     end
 
     subgraph Backend_Layer["HỆ THỐNG MÁY CHỦ BACKEND (TV1)"]

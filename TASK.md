@@ -75,6 +75,8 @@ DỰ ÁN: IOT LOCAL WEATHER FORECASTING
 
 > **Cập nhật phần cứng đã chọn:** NodeMCU ESP8266 Amica, BMP280, DHT11, cảm biến mưa AO, OLED SH1106 1,3 inch, còi 5V, relay 1 kênh 5V và LED. Xem [danh sách mua](docs/hardware_shopping_list.md).
 
+> **Chuẩn bị firmware (27/10/2026):** Đã build thành công môi trường `esp8266`/`nodemcuv2`; host tests kiểm tra bộ lọc lỗi/phục hồi, ngưỡng mưa, relay/LED và tràn `millis()`. Cấu hình cá nhân dùng `firmware/include/weather_config.h`. Các mục IOT-01 đến IOT-05 dưới đây vẫn chờ nghiệm thu trên board đủ phụ kiện; build thành công chưa chứng minh nguồn, A0, cảm biến hay MQTT liên thông thực tế. Quy trình: [firmware/README.md](firmware/README.md).
+
 | Mã Task | Tên công việc | Mô tả chi tiết | Đầu ra (Deliverables) | Mức độ ưu tiên | Trạng thái |
 |---|---|---|---|:---:|:---:|
 | `IOT-01` | Khảo sát & Test linh kiện | Kiểm tra ESP8266 hiện có, relay 5V có nhận mức điều khiển 3,3V, buzzer 5V chủ động/thụ động, LED; chọn BMP280 I2C + DHT11, cảm biến mưa AO chạy 3,3V, OLED SH1106 1,3 inch và nguồn phù hợp. | Bảng test linh kiện hoạt động tốt | Cao | [ ] |

@@ -98,6 +98,8 @@ ai_engine/reports/
 !ai_engine/saved_models/.gitkeep
 
 # --- Embedded & C++ (PlatformIO / Arduino / ESP-IDF) ---
+firmware/include/config.h
+firmware/include/weather_config.h
 .pio/
 .pioenvs/
 .piolibdeps/
