@@ -96,6 +96,9 @@ ai_engine/reports/
 *.pkl
 *.onnx
 !ai_engine/saved_models/.gitkeep
+# [TV2] ML model artifacts tracked explicitly (small benchmark/DL models < 20MB)
+!ml/models/*.joblib
+!ml/models/*.pt
 
 # --- Embedded & C++ (PlatformIO / Arduino / ESP-IDF) ---
 .pio/
