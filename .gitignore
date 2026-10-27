@@ -99,6 +99,8 @@ ai_engine/reports/
 # [TV2] ML model artifacts tracked explicitly (small benchmark/DL models < 20MB)
 !ml/models/*.joblib
 !ml/models/*.pt
+!ml/models/feature_schema.json
+ml/data/
 
 # --- Embedded & C++ (PlatformIO / Arduino / ESP-IDF) ---
 .pio/

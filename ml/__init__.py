@@ -49,6 +49,7 @@ from ml.inference_engine import (
     TemperatureForecast,
     CombinedForecast,
     get_engine,
+    predict_forecast,
     predict_temperature_forecast,
     predict_combined_forecast,
 )
@@ -84,6 +85,7 @@ __all__ = [
     "TemperatureForecast",
     "CombinedForecast",
     "get_engine",
+    "predict_forecast",
     "predict_temperature_forecast",
     "predict_combined_forecast",
 ]

@@ -217,6 +217,20 @@ class TemperatureBenchmark:
             if self.config.save_models:
                 self._save_models(trained, horizon=h)
 
+        if self.config.save_models:
+            save_dir = Path(self.config.model_dir)
+            save_dir.mkdir(exist_ok=True)
+            schema_path = save_dir / "feature_schema.json"
+            schema_info = {
+                "feature_names": list(X_train.columns),
+                "n_features": len(X_train.columns),
+                "horizons": list(self.config.horizons),
+                "target_col": "temperature",
+            }
+            with open(schema_path, "w", encoding="utf-8") as f:
+                json.dump(schema_info, f, indent=2)
+            logger.info("Đã lưu feature schema → %s (%d đặc trưng)", schema_path, len(X_train.columns))
+
         return summary_tables
 
     def print_report(self) -> None:

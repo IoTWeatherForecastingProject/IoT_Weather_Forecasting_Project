@@ -102,19 +102,21 @@ class TemperatureFeatureEngineer:
     # Public API
     # ------------------------------------------------------------------
 
-    def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
+    def transform_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Tạo toàn bộ đặc trưng từ DataFrame đã tiền xử lý.
+        Trích xuất toàn bộ đặc trưng (features) mà KHÔNG sinh các cột nhãn target tương lai.
+        Dùng chung cho cả luồng Huấn luyện (Train) và luồng Dự báo thời gian thực (Inference).
 
         Args:
-            df: DataFrame với DatetimeIndex (đầu ra của TimeSeriesPreprocessor).
+            df: DataFrame với DatetimeIndex (đã qua resample 1 phút và tiền xử lý).
                 Phải chứa ít nhất cột 'temperature'.
 
         Returns:
-            DataFrame bổ sung tất cả cột đặc trưng và các cột target y_10, y_30, y_60.
-            Các hàng có NaN (do lag đầu chuỗi) đã được tự động drop.
+            DataFrame chứa các đặc trưng [A] đến [E].
+            Các hàng có NaN ở đầu chuỗi (do lag/rolling lớn nhất) đã được drop.
+            Hàng cuối cùng (thời điểm t hiện tại) được giữ nguyên vẹn để phục vụ inference.
         """
-        logger.info("=== BẮT ĐẦU FEATURE ENGINEERING ===")
+        logger.info("=== BẮT ĐẦU TRÍCH XUẤT ĐẶC TRƯNG (transform_features) ===")
         df = df.copy()
 
         if self.config.target_col not in df.columns:
@@ -137,27 +139,58 @@ class TemperatureFeatureEngineer:
         # [E] Context features (humidity, pressure và lag của chúng)
         df = self._add_context_features(df)
 
-        # [F] Target labels y tại các horizon khác nhau
-        df = self._add_target_labels(df)
-
-        # Drop các hàng có NaN (do lag đầu chuỗi + target cuối chuỗi)
+        # Drop NaN chỉ ở đầu chuỗi (do lag/rolling), giữ lại dòng mới nhất
         n_before = len(df)
         df = df.dropna()
         n_after = len(df)
         logger.info(
-            "Drop NaN sau feature engineering: %d → %d hàng (mất %d)",
+            "Drop NaN đầu chuỗi do lag/rolling: %d → %d hàng (bỏ %d hàng đầu)",
             n_before, n_after, n_before - n_after
         )
 
-        # Ghi nhớ tên đặc trưng (không bao gồm các cột y_*)
+        # Ghi nhớ tên đặc trưng (loại bỏ target_col và bất kỳ cột nhãn y_*)
         self._feature_names = [
             c for c in df.columns
             if not c.startswith("y_") and c != self.config.target_col
         ]
         logger.info(
-            "=== FEATURE ENGINEERING HOÀN TẤT === %d đặc trưng",
-            len(self._feature_names)
+            "=== TRÍCH XUẤT ĐẶC TRƯNG HOÀN TẤT === %d đặc trưng: %s",
+            len(self._feature_names), self._feature_names
         )
+        return df
+
+    def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Tạo toàn bộ đặc trưng VÀ các nhãn target tương lai (cho training).
+
+        Args:
+            df: DataFrame với DatetimeIndex (đầu ra của TimeSeriesPreprocessor).
+                Phải chứa ít nhất cột 'temperature'.
+
+        Returns:
+            DataFrame bổ sung tất cả cột đặc trưng và các cột target y_10, y_30, y_60.
+            Các hàng có NaN (do lag đầu chuỗi + target cuối chuỗi) đã được tự động drop.
+        """
+        logger.info("=== BẮT ĐẦU FEATURE ENGINEERING (fit_transform) ===")
+        # 1. Trích xuất features dùng chung
+        df = self.transform_features(df)
+
+        # 2. Sinh các nhãn target y tương lai (shift -h)
+        df = self._add_target_labels(df)
+
+        # 3. Drop các hàng cuối cùng bị NaN do target shift(-h)
+        n_before = len(df)
+        df = df.dropna()
+        n_after = len(df)
+        logger.info(
+            "Drop NaN đuôi chuỗi do target shift(-h): %d → %d hàng (mất %d)",
+            n_before, n_after, n_before - n_after
+        )
+
+        self._feature_names = [
+            c for c in df.columns
+            if not c.startswith("y_") and c != self.config.target_col
+        ]
         return df
 
     def get_Xy(
@@ -204,21 +237,28 @@ class TemperatureFeatureEngineer:
     def train_val_test_split(
         self,
         X: pd.DataFrame,
-        y: pd.Series,
+        y: Union[pd.Series, Dict[str, pd.Series]],
         train_ratio: float = 0.70,
         val_ratio: float = 0.15,
+        purge_boundary: bool = True,
     ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame,
-               pd.Series, pd.Series, pd.Series]:
+               Any, Any, Any]:
         """
-        Chia dữ liệu theo thứ tự thời gian (không shuffle) — bắt buộc với time series.
+        Chia dữ liệu theo thứ tự thời gian (không shuffle) kèm cơ chế PURGING GAP
+        để triệt tiêu hoàn toàn rò rỉ thông tin nhãn (boundary leakage) sang tập tiếp theo.
 
-        Tỉ lệ mặc định: 70% train / 15% val / 15% test.
+        Nguyên lý Purging:
+            Vì nhãn y_h được tạo bằng T(t + h) với h lên tới max_horizon (60 phút),
+            nếu không purge, max_horizon mẫu cuối của tập train sẽ lấy nhãn nằm trong
+            khoảng thời gian của tập validation. Tương tự, cuối tập val lấy nhãn của test.
+            Khi purge_boundary=True, max_horizon mẫu cuối ở mỗi ranh giới sẽ được loại bỏ.
 
         Args:
-            X:           Ma trận đặc trưng.
-            y:           Vector target.
-            train_ratio: Tỉ lệ tập train.
-            val_ratio:   Tỉ lệ tập validation.
+            X:              Ma trận đặc trưng.
+            y:              Vector target (pd.Series) hoặc dict {'y_10': Series, ...}.
+            train_ratio:    Tỉ lệ tập train (mặc định 0.70).
+            val_ratio:      Tỉ lệ tập validation (mặc định 0.15).
+            purge_boundary: Bật/tắt loại bỏ mẫu ranh giới để chống rò rỉ (mặc định True).
 
         Returns:
             (X_train, X_val, X_test, y_train, y_val, y_test)
@@ -227,14 +267,49 @@ class TemperatureFeatureEngineer:
         n_train = int(n * train_ratio)
         n_val   = int(n * (train_ratio + val_ratio))
 
-        X_train, y_train = X.iloc[:n_train],   y.iloc[:n_train]
-        X_val,   y_val   = X.iloc[n_train:n_val], y.iloc[n_train:n_val]
-        X_test,  y_test  = X.iloc[n_val:],     y.iloc[n_val:]
+        max_h = max(self.config.forecast_horizons) if self.config.forecast_horizons else 60
 
-        logger.info(
-            "Time-series split: train=%d / val=%d / test=%d",
-            len(X_train), len(X_val), len(X_test)
-        )
+        if purge_boundary:
+            # Loại bỏ max_h bước cuối của train và val để nhãn không vắt sang tập sau
+            train_end = max(1, n_train - max_h)
+            val_end   = max(n_train + 1, n_val - max_h)
+
+            X_train = X.iloc[:train_end]
+            X_val   = X.iloc[n_train:val_end]
+            X_test  = X.iloc[n_val:]
+
+            if isinstance(y, dict):
+                y_train = {k: v.iloc[:train_end] for k, v in y.items()}
+                y_val   = {k: v.iloc[n_train:val_end] for k, v in y.items()}
+                y_test  = {k: v.iloc[n_val:] for k, v in y.items()}
+            else:
+                y_train = y.iloc[:train_end]
+                y_val   = y.iloc[n_train:val_end]
+                y_test  = y.iloc[n_val:]
+
+            logger.info(
+                "Time-series split (PURGED %d-step boundary): train=%d (bỏ %d) / val=%d (bỏ %d) / test=%d",
+                max_h, len(X_train), n_train - train_end, len(X_val), n_val - val_end, len(X_test)
+            )
+        else:
+            X_train = X.iloc[:n_train]
+            X_val   = X.iloc[n_train:n_val]
+            X_test  = X.iloc[n_val:]
+
+            if isinstance(y, dict):
+                y_train = {k: v.iloc[:n_train] for k, v in y.items()}
+                y_val   = {k: v.iloc[n_train:n_val] for k, v in y.items()}
+                y_test  = {k: v.iloc[n_val:] for k, v in y.items()}
+            else:
+                y_train = y.iloc[:n_train]
+                y_val   = y.iloc[n_train:n_val]
+                y_test  = y.iloc[n_val:]
+
+            logger.info(
+                "Time-series split (unpurged): train=%d / val=%d / test=%d",
+                len(X_train), len(X_val), len(X_test)
+            )
+
         return X_train, X_val, X_test, y_train, y_val, y_test
 
     def get_feature_names(self) -> List[str]:

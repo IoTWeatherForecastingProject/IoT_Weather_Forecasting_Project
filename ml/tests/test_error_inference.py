@@ -168,7 +168,8 @@ check(-10 <= forecast.t_plus_10min <= 60,          "t_plus_10min trong [-10, 60]
 check(-10 <= forecast.t_plus_30min <= 60,          "t_plus_30min trong [-10, 60] C")
 check(-10 <= forecast.t_plus_60min <= 60,          "t_plus_60min trong [-10, 60] C")
 check(forecast.latency_ms >= 0,                    "latency_ms >= 0")
-check(forecast.confidence in ("normal","fallback"),"confidence hop le")
+check(forecast.confidence == "normal",             "confidence la 'normal' (model ML thuc te, khong phai fallback)")
+check(forecast.model_used != "Persistence",        "model_used la ML model (XGBoost/Ridge/RF/Lasso)")
 check(isinstance(forecast.model_used, str),        "model_used la string")
 check(len(forecast.model_used) > 0,                "model_used khong rong")
 
@@ -255,6 +256,74 @@ check("model_used"           in result_dict,      "co key 'model_used'")
 combined_dict = predict_combined_forecast(df_input, rain_prob)
 check(isinstance(combined_dict, dict),            "predict_combined_forecast tra ve dict")
 check("rain_probability" in combined_dict,        "combined_dict co rain_probability")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TEST GROUP 9: Regression Tests — Khắc phục 5 điểm Review
+# ══════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 60)
+print("  TEST GROUP 9: Regression Tests — Review Fixes")
+print("=" * 60)
+
+from ml.inference_engine import predict_forecast
+
+# 9.1: Kiểm tra API bàn giao predict_forecast() cho TV1 (BE-05)
+pf_result = predict_forecast(df_input)
+check(isinstance(pf_result, dict), "predict_forecast tra ve dict dung format BE-05")
+check(pf_result["confidence"] == "normal", "predict_forecast confidence la 'normal'")
+check(pf_result["model_used"] != "Persistence", "predict_forecast chay model ML that")
+
+# 9.2: Dữ liệu IoT tần suất cao (5 giây/mẫu, 1200 hàng = 100 phút)
+# Phải được resample về 1-minute grid và dự báo thành công (Review P1)
+start_time = pd.Timestamp("2026-10-01 08:00:00", tz="UTC")
+iot_5s_records = [
+    {
+        "timestamp": start_time + pd.Timedelta(seconds=5 * i),
+        "temperature": 27.0 + 0.005 * i + np.random.randn() * 0.05,
+        "humidity": 65.0 - 0.002 * i,
+        "pressure": 1012.5,
+        "rain_raw": 0.0,
+    }
+    for i in range(1200)   # 1200 * 5s = 6000s = 100 phút
+]
+forecast_5s = engine.predict(iot_5s_records)
+check(forecast_5s.confidence == "normal", "IoT 5s: Resample 1min thanh cong va confidence='normal'")
+check(forecast_5s.model_used != "Persistence", "IoT 5s: Chay model that tren du lieu 5s da resample")
+
+# 9.3: Dữ liệu 90 hàng nhưng chỉ dài 7.5 phút (Review P1)
+# 90 mẫu * 5s = 450s = 7.5 phút -> PHẢI kích hoạt fallback và ghi rõ lỗi thời gian
+short_span_records = iot_5s_records[:90]
+forecast_short = engine.predict(short_span_records)
+check(forecast_short.confidence == "fallback", "90 mau 5s (7.5 phut): Kich hoat fallback")
+check("Lịch sử dữ liệu chỉ dài" in (forecast_short.error_msg or "") or "không đủ" in (forecast_short.error_msg or ""), 
+      "90 mau 5s: error_msg ghi ro thoi gian lich su khong du")
+
+# 9.4: Kiểm tra tính toán Rolling Window không bị max(0, -w-1) bug (Review P2)
+# Tạo chuỗi 100 phút: 94 phút đầu nhiệt độ 20°C, 6 phút cuối nhảy vọt lên 35°C
+step_change_records = [
+    {
+        "timestamp": start_time + pd.Timedelta(minutes=i),
+        "temperature": 20.0 if i < 94 else 35.0,
+        "humidity": 70.0,
+        "pressure": 1013.0,
+        "rain_raw": 0.0,
+    }
+    for i in range(100)
+]
+df_step = pd.DataFrame(step_change_records).set_index("timestamp")
+step_feat = engine._feature_engineer.transform_features(df_step)
+last_row = step_feat.iloc[-1]
+# Rolling 6m chỉ chứa các điểm 35°C (hoặc trung bình gần 35), trong khi rolling 60m chứa đa số 20°C
+check(abs(last_row["T_roll_mean_6m"] - last_row["T_roll_mean_60m"]) > 5.0, 
+      "Rolling 6m != Rolling 60m khi co step change (da sua bug max(0, -w-1))")
+
+# 9.5: Dữ liệu gián đoạn (sensor drop out 10 phút giữa chuỗi)
+discontinuous_records = [
+    r for r in iot_5s_records[:1200]
+    # Bỏ qua đoạn giữa phút 30 đến 40
+    if not (start_time + pd.Timedelta(minutes=30) <= r["timestamp"] < start_time + pd.Timedelta(minutes=40))
+]
+forecast_disc = engine.predict(discontinuous_records)
+check(forecast_disc.confidence == "normal", "Du lieu gian doan 10 phut: Noi suy thanh cong va confidence='normal'")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # KET QUA TONG HOP

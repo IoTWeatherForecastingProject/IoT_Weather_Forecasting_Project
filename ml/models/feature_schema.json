@@ -1,0 +1,41 @@
+{
+  "feature_names": [
+    "humidity",
+    "pressure",
+    "rain_raw",
+    "T_lag_1",
+    "T_lag_2",
+    "T_lag_3",
+    "T_lag_6",
+    "T_lag_10",
+    "T_lag_30",
+    "dT_1min",
+    "dT_5min",
+    "dT_10min",
+    "T_roll_mean_6m",
+    "T_roll_std_6m",
+    "T_roll_mean_10m",
+    "T_roll_std_10m",
+    "T_roll_mean_30m",
+    "T_roll_std_30m",
+    "T_roll_mean_60m",
+    "T_roll_std_60m",
+    "hour_sin",
+    "hour_cos",
+    "dow_sin",
+    "dow_cos",
+    "humidity_lag_1",
+    "humidity_lag_6",
+    "dhumidity_1min",
+    "pressure_lag_1",
+    "pressure_lag_6",
+    "dpressure_1min"
+  ],
+  "n_features": 30,
+  "horizons": [
+    10,
+    30,
+    60
+  ],
+  "target_col": "temperature"
+}

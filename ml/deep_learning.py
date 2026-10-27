@@ -125,8 +125,9 @@ class SlidingWindowDataset(Dataset):
         self.targets     = torch.tensor(targets,     dtype=torch.float32)
         self.window_size = window_size
 
-        # Số mẫu hợp lệ: từ index W-1 đến T-1
-        self.n_samples = len(features) - window_size
+        # Số mẫu hợp lệ: từ index 0 đến len(features) - window_size
+        # (tương ứng với W bước đầu tiên [0:W] đến W bước cuối cùng [T-W:T])
+        self.n_samples = max(0, len(features) - window_size + 1)
 
         if self.n_samples <= 0:
             raise ValueError(
@@ -461,20 +462,33 @@ class DeepForecastEvaluator:
     def evaluate(
         self,
         loader:      DataLoader,
-        y_true_raw:  np.ndarray,   # (N, H) — °C gốc (không scale)
+        y_true_raw:  Optional[np.ndarray] = None,   # Giữ param để tương thích backwards
     ) -> Dict[str, Dict[str, float]]:
         """
         Tính MAE, RMSE, R² cho từng horizon.
+        ĐỒNG BỘ 100% GROUND TRUTH: Trích xuất y_true trực tiếp từ DataLoader
+        theo từng batch thay vì cắt mảng bên ngoài, đảm bảo không bị off-by-one
+        hay lệch chỉ số dù dataset có bất kỳ độ dài nào.
 
         Returns:
             metrics: {'h10': {mae, rmse, r2}, 'h30': ..., 'h60': ...}
         """
-        y_pred = self.predict(loader)     # (N, H)
+        self.model.eval()
+        preds, trues = [], []
 
-        # Cắt y_true về cùng N với y_pred (do sliding window cắt đầu chuỗi)
-        n = min(len(y_pred), len(y_true_raw))
-        y_pred    = y_pred[:n]
-        y_true    = y_true_raw[-n:]       # Lấy đoạn cuối tương ứng
+        with torch.no_grad():
+            for x_batch, y_batch in loader:
+                x_batch = x_batch.to(self.device)
+                out = self.model(x_batch).cpu().numpy()
+                preds.append(out)
+                trues.append(y_batch.numpy())
+
+        y_pred_scaled = np.vstack(preds)
+        y_true_scaled = np.vstack(trues)
+
+        # Inverse transform về °C gốc
+        y_pred = self.scaler_y.inverse_transform(y_pred_scaled)
+        y_true = self.scaler_y.inverse_transform(y_true_scaled)
 
         metrics: Dict[str, Dict[str, float]] = {}
         for i, h in enumerate(self.config.horizons):
@@ -490,10 +504,9 @@ class DeepForecastEvaluator:
                 self.config.model_type, h,
                 metrics[f"h{h}"]["mae"],
                 metrics[f"h{h}"]["rmse"],
-                metrics[f"h{h}"]["r2"],
+                metrics[f"h{h}"]["r2"]
             )
         return metrics
-
     def compare_with_ml(
         self,
         dl_metrics: Dict[str, Dict[str, float]],

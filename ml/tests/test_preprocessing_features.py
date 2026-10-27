@@ -135,13 +135,28 @@ try:
     check(len(X) == len(y_dict["y_10"]),           "X và y có cùng số hàng")
     check(X.isna().sum().sum() == 0,              "X không có NaN")
 
-    # Train/val/test split
-    X_tr, X_v, X_te, y_tr, y_v, y_te = engineer.train_val_test_split(
-        X, y_dict["y_10"]
+    # Train/val/test split (unpurged check)
+    X_tr_u, X_v_u, X_te_u, _, _, _ = engineer.train_val_test_split(
+        X, y_dict["y_10"], purge_boundary=False
     )
-    total = len(X_tr) + len(X_v) + len(X_te)
-    check(total == len(X), "Split: tổng hàng khớp sau khi ghép lại")
-    check(len(X_tr) > len(X_te), "Train set lớn hơn test set")
+    total_u = len(X_tr_u) + len(X_v_u) + len(X_te_u)
+    check(total_u == len(X), "Split: tổng hàng khớp khi purge_boundary=False")
+
+    # Train/val/test split (PURGED check - Review P2)
+    X_tr, X_v, X_te, y_tr, y_v, y_te = engineer.train_val_test_split(
+        X, y_dict["y_10"], purge_boundary=True
+    )
+    check(len(X_tr) > len(X_te), "Train set lớn hơn test set (khi purge)")
+    max_h = max(engineer.config.forecast_horizons)
+    # Ranh giới train -> val: thời điểm nhãn cuối cùng của train phải <= thời điểm feature đầu tiên của val
+    train_target_max_time = X_tr.index[-1] + pd.Timedelta(minutes=max_h)
+    val_feature_min_time  = X_v.index[0]
+    check(train_target_max_time <= val_feature_min_time, "Không có rò rỉ nhãn train -> val (Purge gap >= 60m)")
+
+    # Ranh giới val -> test: thời điểm nhãn cuối cùng của val phải <= thời điểm feature đầu tiên của test
+    val_target_max_time   = X_v.index[-1] + pd.Timedelta(minutes=max_h)
+    test_feature_min_time = X_te.index[0]
+    check(val_target_max_time <= test_feature_min_time, "Không có rò rỉ nhãn val -> test (Purge gap >= 60m)")
 
     # Feature names
     feat_names = engineer.get_feature_names()

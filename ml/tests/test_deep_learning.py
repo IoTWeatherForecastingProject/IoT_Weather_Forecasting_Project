@@ -64,16 +64,21 @@ dummy_X = np.random.randn(N, F).astype(np.float32)
 dummy_y = np.random.randn(N, H).astype(np.float32)
 
 ds = SlidingWindowDataset(dummy_X, dummy_y, window_size=W)
-check(len(ds) == N - W,      f"Dataset length = N - W = {N - W}")
+expected_len = N - W + 1
+check(len(ds) == expected_len, f"Dataset length = N - W + 1 = {expected_len} (khong bo sot window cuoi)")
 x0, y0 = ds[0]
 check(x0.shape == (W, F),    f"Sample X shape = ({W}, {F})")
 check(y0.shape == (H,),      f"Sample y shape = ({H},)")
 check(x0.dtype == torch.float32, "X dtype = float32")
 check(y0.dtype == torch.float32, "y dtype = float32")
 
-# Edge: window_size = N-1 → 1 sample
+# Kiem tra mau cuoi cung khop chinh xac voi target cuoi cung
+x_last, y_last = ds[len(ds) - 1]
+check(torch.allclose(y_last, torch.tensor(dummy_y[-1], dtype=torch.float32)), "ds[-1] target khop dung hang cuoi dummy_y")
+
+# Edge: window_size = N-1 → 2 samples (0..N-2 và 1..N-1)
 ds_edge = SlidingWindowDataset(dummy_X, dummy_y, window_size=N-1)
-check(len(ds_edge) == 1, "Edge case: window=N-1 cho 1 sample")
+check(len(ds_edge) == 2, "Edge case: window=N-1 cho 2 samples")
 
 # ── Test Group 2: DeepForecastModel ───────────────────────────────────────
 print("\n" + "=" * 58)
@@ -215,6 +220,40 @@ check("MAE (°C)"  in compare_df.columns,     "compare_df có cột MAE (°C)")
 check("RMSE (°C)" in compare_df.columns,     "compare_df có cột RMSE (°C)")
 check("R²"        in compare_df.columns,     "compare_df có cột R²")
 check(len(compare_df) == 3, f"compare_df có 3 hàng (3 horizons, chỉ DL)")
+
+# ── Test Group 7: Regression Test — evaluate() Perfect Prediction (MAE=0) ──
+print("\n" + "=" * 58)
+print("  TEST GROUP 7: Regression — evaluate() Ground-Truth Alignment")
+print("=" * 58)
+
+# Tao Mock Model tra ve chinh xac target da duoc gan trong x (hoac bat ky ham dong nhat nao)
+class MockIdentityModel(torch.nn.Module):
+    def forward(self, x):
+        # Trả về 3 cột đầu tiên tại bước cuối của x
+        return x[:, -1, :3]
+
+# Tao dataset test nho
+n_eval_samples = 50
+synth_X = np.random.randn(n_eval_samples, F).astype(np.float32)
+# Cho target chinh xac bang 3 dac trung dau tien tai buoc cuoi
+synth_y = synth_X[:, :3].copy()
+ds_eval = SlidingWindowDataset(synth_X, synth_y, window_size=W)
+loader_eval = torch.utils.data.DataLoader(ds_eval, batch_size=16, shuffle=False)
+
+from ml.deep_learning import DeepForecastEvaluator
+from sklearn.preprocessing import MinMaxScaler
+
+dummy_scaler = MinMaxScaler()
+dummy_scaler.fit(synth_y)
+
+evaluator_perfect = DeepForecastEvaluator(
+    MockIdentityModel(), dummy_scaler, DeepLearningConfig(window_size=W, horizons=[10, 30, 60])
+)
+metrics_perfect = evaluator_perfect.evaluate(loader_eval)
+check(abs(metrics_perfect["h10"]["mae"]) < 1e-4, f"Mock perfect model MAE = 0.0 (thuc te: {metrics_perfect['h10']['mae']:.6f})")
+check(abs(metrics_perfect["h30"]["mae"]) < 1e-4, f"Mock perfect model h30 MAE = 0.0")
+check(abs(metrics_perfect["h60"]["mae"]) < 1e-4, f"Mock perfect model h60 MAE = 0.0")
+check(metrics_perfect["h10"]["r2"] > 0.999,      "Mock perfect model R² = 1.0 (khong lech nhan 1 buoc)")
 
 # ── Kết quả ───────────────────────────────────────────────────────────────
 print("\n" + "=" * 58)
