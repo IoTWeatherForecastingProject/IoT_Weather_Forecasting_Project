@@ -8,6 +8,8 @@
 [![MQTT](https://img.shields.io/badge/Protocol-MQTT%20QoS%201-orange.svg)](https://mqtt.org/)
 [![ESP32/ESP8266](https://img.shields.io/badge/Hardware-ESP32%20%2F%20ESP8266-red.svg)](https://www.espressif.com/)
 
+**Phần cứng của trạm hiện tại:** Đã có ESP8266, DHT11, còi 5V, module relay 1 kênh 5V và LED. Firmware chính dùng ESP8266 với BME280, cảm biến mưa và OLED SSD1306; các linh kiện này cần mua để chạy đúng chức năng hiện có. DHT11 dùng để thử nhiệt độ/độ ẩm trước khi có BME280, vì không đo áp suất. Danh sách mua và lưu ý đấu nối: [docs/hardware_shopping_list.md](docs/hardware_shopping_list.md).
+
 ---
 
 ## 1. Tổng quan Dự án (Project Overview)
@@ -32,7 +34,7 @@ flowchart TD
     subgraph IoT_Station["TRẠM ĐO IOT NGOÀI TRỜI (TV1)"]
         Sensors["Cảm biến (BME280 + Rain Sensor)"] -->|I2C / ADC| MCU["ESP8266 / ESP32 MCU"]
         MCU -->|Moving Average Filter| Payload["Đóng gói JSON Payload"]
-        Actuators["Còi Buzzer + Đèn LED + OLED SSD1306"] -.->|Phản hồi 2 chiều| MCU
+        Actuators["Relay 5V + Còi Buzzer 5V + Đèn LED + OLED SSD1306"] -.->|Phản hồi 2 chiều| MCU
     end
 
     subgraph Communication["TẦNG TRUYỀN DẪN (TV1)"]

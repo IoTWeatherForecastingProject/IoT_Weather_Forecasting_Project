@@ -81,7 +81,7 @@ void setup() {
     // Cấu hình chân GPIO ngoại vi
     pinMode(PIN_BUZZER, OUTPUT);
     pinMode(PIN_STATUS_LED, OUTPUT);
-    digitalWrite(PIN_BUZZER, LOW);
+    digitalWrite(PIN_BUZZER, !RELAY_ACTIVE_LEVEL);
     digitalWrite(PIN_STATUS_LED, LOW);
 
     // Khởi tạo I2C
@@ -255,7 +255,7 @@ void updateOLED(float temp, float hum, float press, const char* statusMsg) {
 
 void handleAlertSignals() {
     if (!isAlertActive) {
-        digitalWrite(PIN_BUZZER, LOW);
+        digitalWrite(PIN_BUZZER, !RELAY_ACTIVE_LEVEL);
         digitalWrite(PIN_STATUS_LED, LOW);
         return;
     }
@@ -265,18 +265,21 @@ void handleAlertSignals() {
     // Cảnh báo kêu ngắt quãng trong 10 giây rồi tự tắt
     if (currentMillis - alertStartTime > 10000) {
         isAlertActive = false;
-        digitalWrite(PIN_BUZZER, LOW);
+        digitalWrite(PIN_BUZZER, !RELAY_ACTIVE_LEVEL);
         digitalWrite(PIN_STATUS_LED, LOW);
         Serial.println("[ALERT] Ket thuc chu ky canh bao.");
         return;
     }
 
-    // Nháy đèn và kêu bíp ngắt quãng mỗi 250ms
+    // A mechanical relay closes once per alert instead of switching every 250ms.
+    digitalWrite(PIN_BUZZER, (currentMillis - alertStartTime < RELAY_ON_TIME_MS)
+        ? RELAY_ACTIVE_LEVEL : !RELAY_ACTIVE_LEVEL);
+
+    // LED continues blinking throughout the 10-second alert.
     if (currentMillis - lastBlinkTime >= 250) {
         lastBlinkTime = currentMillis;
         alertBlinkState = !alertBlinkState;
         digitalWrite(PIN_STATUS_LED, alertBlinkState);
-        digitalWrite(PIN_BUZZER, alertBlinkState);
     }
 }
 

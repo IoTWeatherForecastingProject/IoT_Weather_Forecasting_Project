@@ -73,13 +73,15 @@ DỰ ÁN: IOT LOCAL WEATHER FORECASTING
 > **Phối hợp:** TV2 và TV3 hỗ trợ lắp ráp cơ khí hộp trạm và mua linh kiện ở Tuần 1.  
 > **Mục tiêu:** Xây dựng toàn bộ hạ tầng từ phần cứng thu thập đến máy chủ lưu trữ, cung cấp API và điều khiển phản hồi 2 chiều.
 
+> **Cập nhật phần cứng đang có:** ESP8266, DHT11, còi 5V, relay 1 kênh 5V và LED. Trạm hoàn chỉnh dùng ESP8266 + BME280 + cảm biến mưa + OLED; DHT11 chỉ dùng thử ban đầu. Xem [danh sách mua](docs/hardware_shopping_list.md).
+
 | Mã Task | Tên công việc | Mô tả chi tiết | Đầu ra (Deliverables) | Mức độ ưu tiên | Trạng thái |
 |---|---|---|---|:---:|:---:|
-| `IOT-01` | Khảo sát & Test linh kiện | Lựa chọn và kiểm tra thông số: ESP8266/ESP32, BME280 (I2C), Rain Sensor (Analog/Digital), Màn hình OLED SSD1306, Còi Buzzer, Đèn LED, module nguồn ổn áp. | Bảng test linh kiện hoạt động tốt | Cao | [ ] |
+| `IOT-01` | Khảo sát & Test linh kiện | Kiểm tra ESP8266 hiện có, relay 5V có nhận mức điều khiển 3,3V, buzzer 5V chủ động/thụ động, LED; chọn BME280 I2C, cảm biến mưa AO chạy 3,3V, OLED SSD1306 và nguồn phù hợp. | Bảng test linh kiện hoạt động tốt | Cao | [ ] |
 | `IOT-02` | Thiết kế mạch & Lắp ráp trạm | Thiết kế sơ đồ nguyên lý mạch (Schematic); hàn cắm test board; lắp ráp trạm đo vào hộp bảo vệ ngoài trời (chống nắng mưa, thông thoáng cho cảm biến). | Sơ đồ nguyên lý + Hộp trạm hoàn chỉnh | Cao | [ ] |
 | `IOT-03` | Lập trình Firmware đọc cảm biến | Code C++/Arduino đọc BME280 và Rain Sensor; áp dụng bộ lọc trung bình trượt (Moving Average Filter) trên MCU để giảm nhiễu trước khi truyền đi. | Firmware đọc sensor chuẩn xác | Cao | [ ] |
 | `IOT-04` | Lập trình WiFi & MQTT Client | Xây dựng cơ chế Auto-reconnect khi rớt mạng WiFi/MQTT; đóng gói payload JSON chuẩn; publish định kỳ 5–10s lên topic `weather/station01/data`. | Firmware MQTT Client hoạt động ổn định | Cao | [ ] |
-| `IOT-05` | Firmware Điều khiển phản hồi | Lập trình subscribe topic `weather/station01/alert`; hiển thị số liệu lên OLED; kích hoạt còi Buzzer (tiếng ngắt quãng) và nhấp nháy LED khi nhận cảnh báo mưa cao. | Firmware phản hồi ngoại vi 2 chiều | Cao | [ ] |
+| `IOT-05` | Firmware Điều khiển phản hồi | Subscribe topic `weather/station01/alert`; hiển thị OLED; đóng relay cấp 5V cho còi một lần trong 3 giây, LED nhấp nháy 10 giây khi nhận cảnh báo mưa cao. | Firmware phản hồi ngoại vi 2 chiều | Cao | [ ] |
 | `BE-01` | Cài đặt MQTT Broker & Đo đạc QoS | Cấu hình Mosquitto/EMQX; thiết lập User/Password, bảo mật Topic; thực nghiệm khảo sát độ trễ và tỉ lệ mất gói tin ở hai mức QoS 0 và QoS 1. | Broker bảo mật + Báo cáo so sánh QoS | Cao | [ ] |
 | `BE-02` | Thiết kế CSDL Time-Series | Thiết kế Schema PostgreSQL: bảng `weather_measurements`, đánh chỉ mục Composite Index (`device_id`, `timestamp DESC`), tối ưu hóa truy vấn cửa sổ trượt. | File SQL Migration & Schema tối ưu | Cao | [ ] |
 | `BE-03` | Xây dựng Data Ingestion Worker | Viết service chạy ngầm (Python daemon) lắng nghe MQTT, validate dữ liệu, gán timestamp chuẩn ISO-8601 và ghi vào PostgreSQL với hiệu năng cao. | Worker chạy nền có logging và auto-recover | Cao | [ ] |
