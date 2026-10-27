@@ -46,8 +46,8 @@
 - **Hiện tượng & Tiêu chí đạt:**
   1. **Trên Web Dashboard:** Banner cảnh báo màu đỏ xuất hiện nổi bật: `CẢNH BÁO MƯA CỤC BỘ (CLOSED-LOOP TRIGGERED)`.
   2. **Dưới trạm đo IoT:**
-     - Còi Buzzer phát âm thanh bíp bíp ngắt quãng liên tục.
+     - Relay cấp nguồn cho còi 5V một lần khoảng 3 giây; LED tiếp tục nháy trong chu kỳ cảnh báo 10 giây.
      - Đèn LED cảnh báo chớp nháy đỏ.
-     - Màn hình OLED hiển thị dòng chữ: `CANH BAO MUA (+30m: 85%)`.
+     - Màn hình OLED SH1106 hiển thị `action.oled_message`, ví dụ `MUA (+30m: 85%)`.
   3. **Trên điện thoại người dùng:** Nhận được tin nhắn cảnh báo tức thì từ Telegram Bot kèm thông số chi tiết.
 

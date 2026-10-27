@@ -41,7 +41,7 @@ LOCAL_TZ = "Asia/Ho_Chi_Minh"
 DEFAULT_OUT_ROOT = Path(__file__).resolve().parents[1] / "reports" / "benchmark"
 NOTES = [
     "Sai số được tính là IoT - tham chiếu.",
-    ("Áp suất IoT là áp suất tại trạm (BME280) và được so với surface_pressure; "
+    ("Áp suất IoT là áp suất tại trạm (BMP280) và được so với surface_pressure; "
      "độ lệch cố định có thể do chênh lệch độ cao."),
     ("Open-Meteo là dữ liệu mô hình (reanalysis/forecast) độ phân giải km, "
      "không phải phép đo tại chỗ."),

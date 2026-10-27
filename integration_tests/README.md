@@ -13,7 +13,7 @@
 2. **Kiểm thử chịu lỗi (Fault Tolerance & Stress Test):**
    - Mất kết nối WiFi / MQTT và khả năng tự phục hồi (Auto-reconnect).
    - Dữ liệu cảm biến bị gián đoạn thời gian dài (Missing data interpolation).
-   - Cảm biến mưa bị kẹt nước hoặc cảm biến BME280 bị rút dây.
+   - Cảm biến mưa bị kẹt nước hoặc cảm biến BMP280/DHT11 bị rút dây.
    - Tải truy cập nhiều WebSocket client cùng lúc.
 
 ---
@@ -36,6 +36,14 @@ Khi chưa có phần cứng thật hoặc khi kiểm thử trên máy tính, s�
 ### Kịch bản 1: Giả lập thời tiết bình thường
 ```bash
 python simulate_iot_device.py --broker localhost --port 1883 --interval 5
+```
+
+Mặc định `rain_raw` dùng ADC 10-bit (0–1023) của NodeMCU ESP8266; thêm `--adc-bits 12` nếu cần dữ liệu giả lập kiểu ESP32. Cờ `rain_detected` và giá trị AO được tạo cùng chiều: giá trị thấp biểu thị ướt. Đây là dữ liệu tổng hợp, không thay cho hiệu chỉnh cảm biến thật.
+
+Kiểm tra offline các kịch bản ADC 10/12-bit (cần `paho-mqtt`, không cần broker), chạy từ thư mục gốc:
+
+```bash
+python -m unittest discover -s integration_tests -p test_simulator_payloads.py
 ```
 
 ### Kịch bản 2: Kích hoạt tình huống mưa dông (Kích hoạt Cảnh báo 2 chiều)

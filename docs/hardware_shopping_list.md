@@ -11,6 +11,11 @@ Cập nhật ngày 27/10/2026 theo những linh kiện người dùng đã xác 
 | 1 | Buzzer 5V có dây | Còi cảnh báo. Thử nguồn 5V để xác định loại còi chủ động; nếu chỉ là loại thụ động thì cần sửa phần phát âm. |
 | 1 | Module relay 1 kênh, cuộn hút 5V `SRD-05VDC-SL-C` | Đóng/cắt đường cấp 5V cho còi. Xác minh các chân VCC/GND/IN, COM/NO/NC và mức kích HIGH/LOW trên chính module; chữ 5V trên relay chỉ xác nhận điện áp cuộn hút, không chứng minh ngõ IN nhận mức 3,3V. |
 | Nhiều | LED | Dùng một LED đỏ để cảnh báo, phần còn lại dự phòng. |
+| 1 | Breadboard cỡ MB-102 830 lỗ | Tận dụng để thử trên bàn; kiểm tra lỗ cắm, tính liên tục thanh nguồn. Chỉ bổ sung breadboard nếu thiếu chỗ. |
+| Nhiều | Điện trở than và điện trở màng kim loại | Đo/tách 220–330 Ω cho LED; khoảng 10 kΩ cho DHT11 trần. Chưa xác nhận từng giá trị bằng ảnh. |
+| Nhiều | Diode 1N4007 | Dự phòng; cấu hình relay module hiện tại không yêu cầu gắn thêm diode rời. |
+| 1 | LCD ký tự 16×2 có module I2C | Dự phòng. Firmware chính dùng SH1106; dùng LCD cần driver khác và kiểm tra điện áp pull-up SDA/SCL, có thể cần chuyển mức 3,3V↔5V. |
+| 1 | Adapter 12V–1A | Chỉ tận dụng qua bộ hạ áp xuống 5V; không cắm trực tiếp vào NodeMCU/còi/relay 5V. |
 
 ## Cần mua cho trạm hoạt động đúng mục tiêu dự án
 
@@ -19,9 +24,8 @@ Cập nhật ngày 27/10/2026 theo những linh kiện người dùng đã xác 
 | 1 bộ | Cảm biến mưa có **tấm dò + module AO/DO + dây nối**, chạy được ở 3,3V. Code đọc **AO**, không dùng DO. | 15–35 nghìn ₫ | [Tìm cảm biến mưa trên Shopee](https://shopee.vn/search?keyword=c%E1%BA%A3m%20bi%E1%BA%BFn%20m%C6%B0a%20AO%20DO%203.3V) |
 | 1 | Module **BMP280** I2C 3,3V đo nhiệt độ và áp suất, ưu tiên đã hàn chân; kiểm tra đúng chip BMP280. | 19–50 nghìn ₫ | [Tìm BMP280 3,3V trên Shopee](https://shopee.vn/search?keyword=GY-BMP280%203.3V) |
 | 1 | OLED **SH1106 1,3 inch, 128×64, I2C 4 chân**, hỗ trợ 3,3V; chân GND/VCC/SCL/SDA; firmware dùng địa chỉ `0x3C`. Chọn đúng biến thể SH1106. | Khoảng 75 nghìn ₫ theo ảnh người dùng gửi | [Tìm OLED SH1106 1,3 inch trên Shopee](https://shopee.vn/search?keyword=OLED%201.3%20inch%20SH1106%20I2C%20128x64) |
-| 1–2 | Breadboard MB-102 830 lỗ. Một số board ESP8266 bản rộng cần hai breadboard đặt cạnh nhau. | 30–45 nghìn ₫/cái | [Tìm breadboard trên Shopee](https://shopee.vn/list/testboard) |
-| 1–2 bộ | Dây Dupont 20 cm: đực–đực, đực–cái và cái–cái tùy đầu chân của cảm biến/relay. | 20–50 nghìn ₫/bộ | [Ví dụ dây Dupont trên Shopee](https://shopee.vn/D%C3%A2y-Dupont-10cm-20CM-30CM-40-Pin-Dupont-N%E1%BB%91i-%C4%90%E1%BA%A7u-%C4%90%E1%BB%B1c-C%C3%A1i-DIY-i.1038054123.19991090543) |
-| 1 gói | Điện trở **220–330 Ω** cho LED; thêm **10 kΩ** nếu DHT11 là cảm biến trần chưa có điện trở kéo lên. | 5–15 nghìn ₫ | [Tìm gói điện trở trên Shopee](https://shopee.vn/search?keyword=%C4%91i%E1%BB%87n%20tr%E1%BB%9F%20220%20ohm%20330%20ohm%2010k) |
+| 2 bó | Dây Dupont 20 cm: **1 bó đực–đực + 1 bó đực–cái**, tận dụng dây đang có trước. Đầu cái nối chân đực module, đầu đực nối breadboard/ổ cái. Cái–cái chỉ cần khi nối trực tiếp hai hàng chân đực. | 20–50 nghìn ₫/bộ | [Ví dụ dây Dupont trên Shopee](https://shopee.vn/D%C3%A2y-Dupont-10cm-20CM-30CM-40-Pin-Dupont-N%E1%BB%91i-%C4%90%E1%BA%A7u-%C4%90%E1%BB%B1c-C%C3%A1i-DIY-i.1038054123.19991090543) |
+| Chỉ khi thiếu | Điện trở **220–330 Ω** cho LED, **10 kΩ** cho DHT11 trần; kiểm tra gói sẵn có trước. Chia áp A0 chọn sau khi xác minh board và AO. | 5–15 nghìn ₫ | [Tìm gói điện trở trên Shopee](https://shopee.vn/search?keyword=%C4%91i%E1%BB%87n%20tr%E1%BB%9F%20220%20ohm%20330%20ohm%2010k) |
 | 1 | Cáp USB **có truyền dữ liệu**, đúng cổng trên board ESP8266 đang có. | 20–50 nghìn ₫ | [Tìm cáp USB trên Shopee](https://shopee.vn/search?keyword=c%C3%A1p%20micro%20usb%20truy%E1%BB%81n%20d%E1%BB%AF%20li%E1%BB%87u) |
 | 1 | Adapter USB 5V, tối thiểu 1A, dùng cho board và relay; tận dụng sạc sẵn có nếu phù hợp. | 30–80 nghìn ₫ | [Tìm nguồn 5V trên Shopee](https://shopee.vn/search?keyword=ngu%E1%BB%93n%20usb%205v%202a) |
 | Tùy chọn | Dây/đầu chia 5V–GND nếu không tiện lấy đường 5V USB từ chân VIN/VU của NodeMCU. | 15–35 nghìn ₫ | [Tìm đầu cấp 5V USB trên Shopee](https://shopee.vn/search?keyword=usb%205v%20%C4%91%E1%BA%A7u%20ra%20terminal%20v%C3%ADt) |
@@ -44,10 +48,10 @@ Phần lắp ngoài trời dự trù thêm khoảng **110–260 nghìn ₫**, t�
 ## Kiểm tra trước khi nối điện
 
 1. Xác nhận chính xác biến thể ESP8266 và mức điện áp **A0** của board. ADC của chip ESP8266 là khoảng 0–1 V, nhưng một số board NodeMCU có chia áp trên board; không nối AO 3,3V/5V vào A0 khi chưa kiểm tra.
-2. Cấp cảm biến mưa ở **3,3V** nếu module hỗ trợ; nếu chỉ hoạt động 5V, cần chia áp/đổi mức cho AO hoặc chọn module 3,3V. Đọc giá trị khô và ướt rồi chỉnh `RAIN_ANALOG_THRESHOLD` trong `firmware/include/config.h`. Nếu module cho giá trị ướt *cao hơn* giá trị khô, cần đảo điều kiện so sánh trong firmware.
+2. Cấp cảm biến mưa ở **3,3V** nếu module hỗ trợ; nếu chỉ hoạt động 5V, cần chia áp/đổi mức cho AO hoặc chọn module 3,3V. Đọc giá trị khô và ướt rồi chỉnh `RAIN_ANALOG_THRESHOLD` trong `firmware/include/weather_config.h`. Nếu module cho giá trị ướt *cao hơn* giá trị khô, cần đảo điều kiện so sánh trong firmware.
 3. Kiểm tra relay nhận được mức điều khiển **3,3V** từ D6. Chọn HIGH/LOW trên jumper và cập nhật `RELAY_ACTIVE_LEVEL`. Nguồn 5V đi qua tiếp điểm **COM–NO** tới còi, không đi qua GPIO; nối GND chung phần điều khiển khi module yêu cầu.
 4. Buzzer chủ động 5V sẽ kêu khi cấp 5V trực tiếp. Firmware bật relay **một lần trong 3 giây**, LED tiếp tục nháy trong 10 giây. Nếu còi thụ động cần phần phát xung riêng.
-5. BMP280 nối 3,3V, GND, SDA→D2, SCL→D1; OLED SH1106 3,3V nối GND→GND, VCC→3V3, SCL→D1, SDA→D2 và chia sẻ bus I2C. DHT11 3,3V nối DATA→D5, thêm kéo lên 10 kΩ nếu là cảm biến trần. LED nối D7 qua điện trở; relay IN nối D6. Kiểm tra `config.h` trước khi nạp.
+5. BMP280 nối 3,3V, GND, SDA→D2, SCL→D1; OLED SH1106 3,3V nối GND→GND, VCC→3V3, SCL→D1, SDA→D2 và chia sẻ bus I2C. DHT11 3,3V nối DATA→D5, thêm kéo lên 10 kΩ nếu là cảm biến trần. LED nối D7 qua điện trở; relay IN nối D6. Kiểm tra `weather_config.h` trước khi nạp.
 6. Cấp NodeMCU qua micro-USB 5V. Nếu lấy 5V USB từ chân VIN/VU để cấp relay VCC và còi, xác nhận đường chân thực tế và thử điện áp khi cả relay/còi hoạt động. 5V→COM relay, NO→cực dương còi, cực âm còi→GND; nối GND relay với GND NodeMCU. Không cấp relay/còi từ chân 3V3 và không đưa 12V trực tiếp vào board.
 
 MQTT broker, cơ sở dữ liệu, backend, AI và dashboard có thể chạy trên máy tính hiện có; không cần mua máy chủ để thử dự án. Chưa thể xác nhận giá cuối cùng hay tồn kho Shopee tại thời điểm thanh toán.

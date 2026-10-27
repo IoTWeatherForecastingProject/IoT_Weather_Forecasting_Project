@@ -95,7 +95,7 @@ ai_engine/
    - Đánh giá bằng **Brier Score**, Brier Skill Score so với baseline và **Reliability Diagram**.
 3. **Phát hiện Bất thường Cảm biến (`sensor_analytics/`):**
    - Bản ghi đơn lẻ: thiếu giá trị, vượt giới hạn vật lý (5–55 °C, 10–100 %, 950–1050 hPa) và spike theo tốc độ thay đổi thực ($|\Delta x| / \max(\Delta t, 1\text{ phút})$; bỏ qua khi mất dữ liệu > 10 phút).
-   - Frozen value BME280: một đại lượng không đổi suốt 30 phút (bỏ qua độ ẩm bão hòa ≥ 99%).
+   - Frozen value BMP280/DHT11: một đại lượng không đổi suốt 30 phút (bỏ qua độ ẩm bão hòa ≥ 99%). DHT11 có độ phân giải thô nên giá trị lặp có thể hợp lệ; đối chiếu log và hiệu chỉnh ngưỡng trước khi kết luận cảm biến hỏng.
    - Đọng nước cảm biến mưa: báo ướt ở mọi mẫu trong 6 giờ, độ ẩm trung bình < 65% và áp suất không giảm quá 0.5 hPa.
    - Mọi cửa sổ tính theo `timestamp`, không theo số dòng. `SensorAnomalyDetector.analyze(df)` trả báo cáo tổng hợp `status` = `OK` / `WARNING` / `FAULT` cho Dashboard. Ngưỡng cấu hình qua `AnomalyConfig`.
 4. **Đối chuẩn Khí tượng (`openweather_benchmark/`):**

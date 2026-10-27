@@ -146,9 +146,9 @@ Không đặt mục tiêu:
 │                    LOCAL WEATHER STATION                  │
 │                                                           │
 │   ┌──────────┐   ┌──────────┐   ┌────────────┐           │
-│   │ BME280   │   │ Rain     │   │ Optional   │           │
+│   │ BMP280   │   │ Rain     │   │ DHT11      │           │
 │   │ Temp     │   │ Sensor   │   │ Sensors    │           │
-│   │ Humidity │   │          │   │            │           │
+│   │          │   │          │   │ Humidity   │           │
 │   │ Pressure │   │          │   │            │           │
 │   └────┬─────┘   └────┬─────┘   └─────┬──────┘           │
 │        └───────────────┴───────────────┘                  │
@@ -220,15 +220,14 @@ Nhiệm vụ:
 - Nhận lệnh cảnh báo.
 - Điều khiển LED, buzzer hoặc OLED.
 
-## 7.2. BME280
+## 7.2. BMP280 và DHT11
 
-BME280 được sử dụng để đo:
+Trạm dùng BMP280 để đo:
 
 - Temperature
-- Humidity
 - Atmospheric pressure
 
-Giao tiếp có thể sử dụng I2C.
+BMP280 giao tiếp I2C; DHT11 đo độ ẩm qua chân D5 của NodeMCU. OLED SH1106 1,3 inch chia sẻ I2C D1/D2 với BMP280. Relay D6 đóng/cắt còi 5V, LED nối D7 qua điện trở; cảm biến mưa AO nối A0 sau khi kiểm tra giới hạn điện áp. Xem `firmware/README.md` và `docs/hardware_shopping_list.md` cho cấu hình nguồn và phụ kiện đã chốt.
 
 ## 7.3. Rain Sensor
 
@@ -744,7 +743,7 @@ GET /api/weather/status
 ## Hardware
 
 - ESP32
-- BME280
+- BMP280 + DHT11
 - Rain Sensor
 - OLED
 - LED
@@ -1006,7 +1005,7 @@ Sensor
 ## MVP — Bắt buộc
 
 - ESP8266
-- BME280
+- BMP280 + DHT11
 - Rain Sensor
 - WiFi
 - MQTT
