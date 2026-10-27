@@ -1,8 +1,8 @@
-# ==============================================================================
+﻿# ==============================================================================
 # Git Ignore Configuration - IoT Local Weather Monitoring & Forecasting Project
 # ==============================================================================
 
-# --- Personal Workspaces (QUAN TRỌNG: Không commit tài liệu nháp cá nhân lên repo chung) ---
+# --- Personal Workspaces (QUAN TRá»ŒNG: KhÃ´ng commit tÃ i liá»‡u nhÃ¡p cÃ¡ nhÃ¢n lÃªn repo chung) ---
 personal/**
 !personal/
 !personal/*/
@@ -77,17 +77,17 @@ dmypy.json
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
 
-# --- Machine Learning Data & Models (Tránh commit file nặng vào Git) ---
-# Bỏ qua dữ liệu thô và đã xử lý lớn, chỉ cho phép commit file mẫu trong data/sample/
+# --- Machine Learning Data & Models (TrÃ¡nh commit file náº·ng vÃ o Git) ---
+# Bá» qua dá»¯ liá»‡u thÃ´ vÃ  Ä‘Ã£ xá»­ lÃ½ lá»›n, chá»‰ cho phÃ©p commit file máº«u trong data/sample/
 ai_engine/data/raw/*
 !ai_engine/data/raw/.gitkeep
 ai_engine/data/processed/*
 !ai_engine/data/processed/.gitkeep
-# Báo cáo đánh giá sinh tự động khi chạy train (JSON, PNG); kết quả chính thức đưa vào docs/reports/
+# BÃ¡o cÃ¡o Ä‘Ã¡nh giÃ¡ sinh tá»± Ä‘á»™ng khi cháº¡y train (JSON, PNG); káº¿t quáº£ chÃ­nh thá»©c Ä‘Æ°a vÃ o docs/reports/
 ai_engine/reports/
 
-# Model weights nặng (PyTorch, TensorFlow, Pickle, Joblib, ONNX > 20MB)
-# Khuyến khích quản lý model weights qua Git LFS / DVC hoặc Google Drive release
+# Model weights náº·ng (PyTorch, TensorFlow, Pickle, Joblib, ONNX > 20MB)
+# Khuyáº¿n khÃ­ch quáº£n lÃ½ model weights qua Git LFS / DVC hoáº·c Google Drive release
 *.h5
 *.pt
 *.pth
@@ -96,6 +96,9 @@ ai_engine/reports/
 *.pkl
 *.onnx
 !ai_engine/saved_models/.gitkeep
+# [TV2] ML model artifacts tracked explicitly (small benchmark/DL models < 20MB)
+!ml/models/*.joblib
+!ml/models/*.pt
 
 # --- Embedded & C++ (PlatformIO / Arduino / ESP-IDF) ---
 .pio/
