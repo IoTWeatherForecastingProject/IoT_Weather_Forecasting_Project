@@ -121,6 +121,7 @@ async def test_stop_wakes_monitor_without_waiting_for_long_interval(monkeypatch)
 
 @pytest.mark.parametrize("enabled", [True, False])
 def test_lifespan_owns_worker_and_monitor_and_cleans_up(monkeypatch, enabled):
+    monkeypatch.setattr(settings, "AUTO_MIGRATE", False)
     monkeypatch.setattr(settings, "ALERT_MONITOR_ENABLED", enabled)
     worker = Mock()
     worker.client.is_connected.return_value = True

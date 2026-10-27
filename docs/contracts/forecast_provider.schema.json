@@ -1,0 +1,148 @@
+{
+  "$defs": {
+    "ForecastHorizon": {
+      "description": "Schema kết quả dự báo tại một mốc thời gian cụ thể.",
+      "properties": {
+        "temperature_c": {
+          "description": "Nhiệt độ dự báo (°C)",
+          "examples": [
+            30.5
+          ],
+          "title": "Temperature C",
+          "type": "number"
+        },
+        "rain_probability": {
+          "description": "Xác suất mưa dự báo (0.0 đến 1.0)",
+          "examples": [
+            0.72
+          ],
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Rain Probability",
+          "type": "number"
+        },
+        "rain_level": {
+          "description": "Mức độ mưa (Low, Medium, High)",
+          "enum": [
+            "Low",
+            "Medium",
+            "High"
+          ],
+          "examples": [
+            "High"
+          ],
+          "title": "Rain Level",
+          "type": "string"
+        },
+        "rain_source": {
+          "description": "Nguồn xác suất mưa: model đã huấn luyện hoặc heuristic",
+          "enum": [
+            "model",
+            "heuristic"
+          ],
+          "title": "Rain Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "temperature_c",
+        "rain_probability",
+        "rain_level",
+        "rain_source"
+      ],
+      "title": "ForecastHorizon",
+      "type": "object"
+    }
+  },
+  "description": "Provider boundary, validated before any external result can trigger an alert.",
+  "properties": {
+    "device_id": {
+      "description": "Mã định danh trạm quan trắc",
+      "examples": [
+        "station01"
+      ],
+      "title": "Device Id",
+      "type": "string"
+    },
+    "generated_at": {
+      "description": "Thời điểm tạo dự báo chuẩn UTC",
+      "format": "date-time",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "current_temperature": {
+      "description": "Nhiệt độ hiện tại (°C)",
+      "examples": [
+        31.2
+      ],
+      "title": "Current Temperature",
+      "type": "number"
+    },
+    "current_humidity": {
+      "description": "Độ ẩm hiện tại (%)",
+      "examples": [
+        78.0
+      ],
+      "title": "Current Humidity",
+      "type": "number"
+    },
+    "current_pressure": {
+      "description": "Áp suất hiện tại (hPa)",
+      "examples": [
+        1006.5
+      ],
+      "title": "Current Pressure",
+      "type": "number"
+    },
+    "plus_10m": {
+      "$ref": "#/$defs/ForecastHorizon",
+      "description": "Dự báo tại mốc +10 phút"
+    },
+    "plus_30m": {
+      "$ref": "#/$defs/ForecastHorizon",
+      "description": "Dự báo tại mốc +30 phút"
+    },
+    "plus_60m": {
+      "$ref": "#/$defs/ForecastHorizon",
+      "description": "Dự báo tại mốc +60 phút"
+    },
+    "alert_triggered": {
+      "description": "Cờ kích hoạt cảnh báo mưa 2 chiều",
+      "examples": [
+        true
+      ],
+      "title": "Alert Triggered",
+      "type": "boolean"
+    },
+    "alert_message": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Nội dung thông báo cảnh báo",
+      "examples": [
+        "Cảnh báo xác suất mưa cao trong 30-60 phút tới!"
+      ],
+      "title": "Alert Message"
+    }
+  },
+  "required": [
+    "device_id",
+    "generated_at",
+    "current_temperature",
+    "current_humidity",
+    "current_pressure",
+    "plus_10m",
+    "plus_30m",
+    "plus_60m",
+    "alert_triggered"
+  ],
+  "title": "ForecastPayload",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

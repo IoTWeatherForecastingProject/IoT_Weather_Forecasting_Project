@@ -59,17 +59,43 @@ python simulate_iot_device.py --simulate-anomaly
 
 ---
 
-## 4. Chạy Kiểm thử Tự Động End-to-End
+## 4. E2E tự động trong môi trường riêng
 
-Script `test_end_to_end.py` sẽ thực hiện toàn bộ quy trình:
-1. Kết nối MQTT và publish 1 bản ghi thời tiết.
-2. Kiểm tra xem Backend Ingestion Worker có ghi bản ghi đó vào PostgreSQL không.
-3. Gọi API `/api/weather/current` và `/api/weather/forecast` kiểm tra kết quả.
-4. Đăng ký nhận topic `weather/station01/alert` để xác nhận Backend bắn lệnh phản hồi khi xác suất mưa cao.
+Chạy từ thư mục gốc dự án, khi Docker PostgreSQL và Mosquitto hoạt động:
 
-Lệnh thực thi:
-```bash
-python test_end_to_end.py
+```powershell
+& backend/.venv/Scripts/python.exe -m pip install -r integration_tests/requirements.txt
+& backend/.venv/Scripts/python.exe integration_tests/test_end_to_end.py --dashboard
 ```
-Nếu toàn bộ các bước đều xanh (`[PASS]`), hệ thống đã sẵn sàng cho buổi nghiệm thu và demo!
+
+Thêm `--report-dir personal/tv1/verification/my-run` để chọn nơi lưu. Bỏ `--dashboard` khi chỉ kiểm tra pipeline. Kiểm thử trình duyệt sử dụng Microsoft Edge đã cài trên Windows.
+
+Script tạo **database PostgreSQL mới và MQTT namespace riêng** `e2e/<run_id>/weather`, chạy backend trên cổng tạm với MQTT client ID riêng. Tài khoản DB phát triển cần quyền CREATE DATABASE; không dùng script này với tài khoản/DB production. Namespace test không khớp subscription `weather/+/data` của backend chính.
+
+Các bước thực tế:
+
+1. Chạy migration trên DB mới, đợi health xác nhận DB/MQTT/tác vụ nền.
+2. Subscribe alert và mở WebSocket trước khi gửi telemetry.
+3. Gieo lịch sử fixture vào DB test; publish mẫu mới qua MQTT, kiểm tra DB/current/history/WebSocket.
+4. Gửi lại mẫu UTC và mẫu lỗi: không thêm DB/stream trùng hoặc số liệu mặc định giả.
+5. Xác nhận cảnh báo từ tác vụ nền trước khi gọi forecast, đúng topic/payload và audit PUBACK.
+6. Gọi forecast nhiều lần, qua thêm chu kỳ nền, kiểm tra cooldown dùng chung.
+7. Đọc/đổi ngưỡng, kiểm tra validation, sensor-health/benchmark và trạng thái dữ liệu rỗng.
+8. Nếu bật `--dashboard`, kiểm tra Edge desktop/mobile: dữ liệu realtime, badge HEURISTIC, đổi ngưỡng, reconnect, lỗi JS/API và tràn ngang; lưu ảnh.
+9. Trong cleanup, khôi phục ngưỡng DB test, dừng backend test và xóa đúng database do script vừa tạo.
+
+E2E dùng `FORECAST_ENGINE_MODE=heuristic` và fixture để ổn định kết quả, không đo độ chính xác model thật. Tác vụ test chạy 0,5 giây/lần; cooldown vẫn 180 giây. Kiểm tra biên hết cooldown bằng đồng hồ điều khiển ở unit test nên không đợi 80 phút thu lịch sử hay 180 giây mỗi lượt E2E.
+
+Kết quả nằm trong `e2e.json`, `backend.log` và hai ảnh Dashboard. Khi bất kỳ bước nào fail, script trả exit code 1; đạt thì 0. Fixture được ghi rõ là dữ liệu test; dữ liệu trạm/nguỡng của backend chính không bị thay đổi. Nghiệm thu model, nguồn/cảm biến và relay/còi thực tế là các bước riêng.
+
+## Kiểm thử độc lập TV1 khi TV2/TV3 chưa merge
+
+Chạy suite backend và E2E trong DB/topic tạm, chặn import AI/phân tích bên ngoài:
+
+```powershell
+& backend/.venv/Scripts/python.exe -m pytest integration_tests/test_virtual_station.py integration_tests/test_simulator_payloads.py -q
+& backend/.venv/Scripts/python.exe integration_tests/test_end_to_end.py --backend-tests --report-dir personal/tv1/verification/independent_run
+```
+
+Mỗi lượt ghi `e2e.json`, `backend.log`, và khi dùng `--backend-tests` có thêm `backend_pytest.log`/XML. Mặc định heuristic + analytics disabled; raw reference vẫn được trả, bias chưa tích hợp là null và sensor-health là UNKNOWN. Trạm giả lập chỉ kiểm tra hợp đồng nhận lệnh, mô phỏng còi 3s/LED 10s; không tác động board/còi thật và không chứng minh chất lượng model hoặc firmware/điện áp. Không cần `--dashboard` để nghiệm thu phần TV1. Xem [điều kiện bàn giao](../docs/architecture/tv1_independent_handoff.md).
 

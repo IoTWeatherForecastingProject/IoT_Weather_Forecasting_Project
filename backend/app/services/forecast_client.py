@@ -1,22 +1,15 @@
 import logging
-import sys
-from pathlib import Path
 from datetime import datetime, timezone
 import pandas as pd
+from app.config import settings
+from app.schemas.weather import ForecastPayload
+from app.services.optional_providers import load_symbol
+from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
-# Thêm thư mục ai_engine vào sys.path để import dễ dàng
-AI_ENGINE_PATH = Path(__file__).resolve().parent.parent.parent.parent / "ai_engine"
-if str(AI_ENGINE_PATH) not in sys.path:
-    sys.path.append(str(AI_ENGINE_PATH))
-
-try:
-    from inference.unified_forecast import predict_forecast as ai_predict_forecast
-    HAS_AI_ENGINE = True
-except ImportError as e:
-    logger.warning("[FORECAST CLIENT] Chua the import ai_engine (%s). Su dung fallback heuristic.", e)
-    HAS_AI_ENGINE = False
+def load_forecast_predictor():
+    return load_symbol("inference.unified_forecast", "predict_forecast")
 
 
 class ForecastClient:
@@ -32,13 +25,30 @@ class ForecastClient:
         cur_hum = float(latest["humidity"])
         cur_press = float(latest["pressure"])
 
-        # Nếu đã có ai_engine module hoàn chỉnh
-        if HAS_AI_ENGINE:
+        fallback_reason = "standalone_mode"
+        # External code is loaded only after explicit opt-in, never at startup.
+        if settings.FORECAST_ENGINE_MODE == "auto":
             try:
+                predictor = load_forecast_predictor()
                 df = pd.DataFrame(recent_measurements)
-                return ai_predict_forecast(df, threshold=threshold)
+                candidate = predictor(df, threshold=threshold)
+                result = ForecastPayload.model_validate(candidate).model_dump(mode="json")
+                if result["device_id"] != latest["device_id"]:
+                    raise ValueError("Provider returned another device")
+                # TV1 owns the alert decision and configured threshold.
+                result["alert_triggered"] = max(result[f"plus_{h}m"]["rain_probability"] for h in (10, 30, 60)) >= threshold
+                if not result["alert_triggered"]:
+                    result["alert_message"] = None
+                result.update(forecast_engine="external", fallback_reason=None)
+                return result
+            except (ImportError, AttributeError):
+                fallback_reason = "engine_unavailable"
+            except (ValidationError, ValueError, TypeError, KeyError):
+                fallback_reason = "invalid_engine_output"
             except Exception as e:
                 logger.error("[FORECAST CLIENT] Loi khi chay AI inference engine: %s. Chuyen sang fallback.", e)
+                fallback_reason = "engine_failed"
+            logger.warning("[FORECAST CLIENT] Using local heuristic: %s", fallback_reason)
 
         # Fallback Heuristic dự báo tạm thời khi TV2 & TV3 đang huấn luyện mô hình
         # Tính xu hướng tụt áp và tăng ẩm để ước lượng xác suất mưa
@@ -66,6 +76,8 @@ class ForecastClient:
         alert_triggered = max(p10, p30, p60) >= threshold
 
         return {
+            "forecast_engine": "local_heuristic",
+            "fallback_reason": fallback_reason,
             "device_id": latest.get("device_id", "station01"),
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "current_temperature": round(cur_temp, 2),

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column, Integer, BigInteger, Numeric, String, DateTime,
-    SmallInteger, Boolean, Text, Index, desc
+    SmallInteger, Boolean, Text, Index, UniqueConstraint, desc
 )
 from app.db.session import Base
 
@@ -11,6 +11,7 @@ class WeatherMeasurement(Base):
 
     __table_args__ = (
         Index("idx_weather_device_timestamp", "device_id", desc("timestamp")),
+        Index("uq_weather_message_key", "message_key", unique=True),
     )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
@@ -22,6 +23,23 @@ class WeatherMeasurement(Base):
     rain_raw = Column(Integer, nullable=True)
     rain_detected = Column(SmallInteger, default=0)
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    message_key = Column(String(64), nullable=True)
+
+
+class ReferenceWeather(Base):
+    __tablename__ = "reference_weather"
+    __table_args__ = (Index("idx_reference_source_ts", "source", desc("timestamp")),
+                      UniqueConstraint("source", "timestamp", name="uq_reference_source_ts"))
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    source = Column(String(30), nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False)
+    lat = Column(Numeric(8, 5), nullable=False)
+    lon = Column(Numeric(8, 5), nullable=False)
+    temperature = Column(Numeric(5, 2))
+    humidity = Column(Numeric(5, 2))
+    pressure = Column(Numeric(6, 2))
+    precipitation = Column(Numeric(6, 2))
+    fetched_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 class AlertLog(Base):

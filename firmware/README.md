@@ -145,3 +145,33 @@ OLED được thử ở `0x3C`, rồi `0x3D`; BMP280 ở `0x76`, rồi `0x77`. C
 
 Build và host tests chưa chứng minh đường cấp nguồn, điện áp A0 hoặc độ ổn định khi nối đầy đủ phụ kiện; các mục nghiệm thu trên cần chạy với phần cứng thật.
 
+## Thử DHT11 riêng khi chưa đủ cảm biến
+
+Môi trường `esp8266_dht11` chỉ đọc DHT11 trên D5/GPIO14 và in JSON UART 115200 mỗi 2,5 giây. Không publish telemetry thiếu áp suất/mưa và không điều khiển relay. Xác nhận VCC/DATA/GND theo đúng module trước khi đấu, tắt nguồn USB khi đổi dây. Bài thử là bước riêng, chưa phải nghiệm thu trạm đầy đủ.
+
+```powershell
+pio run --project-dir firmware --environment esp8266_dht11
+# Chỉ upload sau khi đã kiểm tra sơ đồ chân/cổng và lưu firmware cũ:
+pio run --project-dir firmware --environment esp8266_dht11 --target upload --upload-port COM9
+```
+
+Nếu PlatformIO đã được cài trong cache cục bộ của dự án, có thể chạy bằng môi trường sẵn có:
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path firmware/.pio/tools).Path
+$env:PLATFORMIO_CORE_DIR = (Resolve-Path firmware/.pio/core).Path
+& firmware/.venv/Scripts/python.exe -m platformio run --project-dir firmware --environment esp8266_dht11
+```
+
+Đừng ghi đè firmware đang dùng trước khi có bản sao lưu nếu cần phục hồi. Môi trường `esp8266` vẫn chỉ build `main.cpp`; môi trường thử chỉ build `dht11_check.cpp`.
+
+## Thử relay riêng cùng DHT11
+
+Môi trường `esp8266_relay` build `src/relay_check.cpp`, UART 115200. Chỉ dùng cho module đã xác nhận đầu vào tương thích mức 3,3 V với jumper H: D6/GPIO12 → IN; DHT11 giữ D5/GPIO14. Ngắt USB khi đổi dây và tháo hoàn toàn dây thử nối IN với DC+ trước khi nối GPIO. Nguồn cuộn hút đi qua DC+/DC−, không lấy từ GPIO; NO/COM/NC và còi để rời trong bài thử này.
+
+```powershell
+pio run --project-dir firmware --environment esp8266_relay
+```
+
+Sau khi xác nhận dây và sao lưu firmware cũ mới upload môi trường này. Khi `setup()` chạy, D6 được đặt LOW; firmware không bảo đảm trạng thái điện trong giai đoạn trước `setup()`. Gửi `STATUS` kèm newline để đọc trạng thái, `RUN` kèm newline để chạy đúng ba chu kỳ HIGH 3 giây / LOW 5 giây, cuối lượt giữ LOW. `STOP` ngắt lượt và đặt LOW. RUN chỉ được chấp nhận một lần mỗi lần khởi động; reset cho phép một lượt mới nhưng không tự chạy. DHT11 tiếp tục được đọc mỗi 2,5 giây. JSON RELAY ghi **lệnh GPIO**, cần quan sát LED/tiếng đóng nhả độc lập; log không xác nhận tiếp điểm hay độ chính xác cảm biến. Không có MQTT hoặc dữ liệu áp suất/mưa giả.
+

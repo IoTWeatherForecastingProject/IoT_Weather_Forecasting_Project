@@ -168,11 +168,13 @@ RAIN_ALERT_THRESHOLD=0.70
 ```
 
 ### Bước 3: Chạy Database Migration
-Đảm bảo container PostgreSQL đang chạy (`docker-compose up -d` ở thư mục gốc), sau đó chạy script khởi tạo:
-```bash
-# Sử dụng psql hoặc DBeaver chạy file:
-migrations/001_init_schema.sql
+Đảm bảo PostgreSQL đang chạy. Backend mặc định áp dụng các migration còn thiếu trước khi chạy MQTT worker (`AUTO_MIGRATE=true`). Mỗi migration có checksum, transaction và khóa để tránh chạy đồng thời; không sửa file SQL đã áp dụng. Docker khởi tạo DB mới từ toàn bộ thư mục migrations. Với DB hiện hữu, có thể chạy thủ công từ gốc dự án:
+
+```powershell
+& backend/.venv/Scripts/python.exe backend/scripts/migrate.py
 ```
+
+Migration 002 thêm dữ liệu tham chiếu; 003 thêm khóa khử bản tin lặp dạng nullable nên giữ nguyên lịch sử cũ. Runner không xóa volume hoặc bản ghi cũ. `AUTO_MIGRATE=false` dùng khi migration được quản lý riêng trong triển khai.
 
 ### Bước 4: Khởi chạy FastAPI Server & Ingestion
 ```bash
@@ -190,4 +192,26 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - [ ] Kênh WebSocket tự động đẩy dữ liệu cho nhiều client cùng lúc (Broadcast).
 - [ ] Khi giả lập dữ liệu xác suất mưa cao $\ge 70\%$, Backend tự động bắn lệnh MQTT xuống `weather/station01/alert` và gửi thông báo Telegram trong vòng < 2 giây.
 - [ ] Vượt qua toàn bộ unit test trong `tests/test_api.py`.
+
+
+
+## Hợp đồng telemetry và API Dashboard
+
+Xem [hợp đồng dữ liệu v1](../docs/architecture/data_contract.md). Mẫu thiếu trường bắt buộc/sai kiểu/NaN/Infinity bị loại; giá trị hữu hạn bất thường giữ nguyên cho chẩn đoán, không clamp. Inference bỏ mẫu ngoài khoảng firmware và trả 409 `sensor_data_unusable` nếu mẫu mới nhất không dùng được. WebSocket chỉ phát sau commit thành công.
+
+Mẫu có timestamp UTC khử trùng bằng unique `message_key`; firmware chỉ gửi uptime khử retransmit trong cache phiên, chưa cam kết exactly-once qua restart. Topic phải khớp device ID. `MQTT_TOPIC_PREFIX` mặc định `weather`; khi dùng namespace riêng cần đổi đồng bộ DATA/ALERT topics.
+
+Ba API dành cho Dashboard đã có ở phía TV1; thuật toán TV3 là tích hợp tùy chọn, chưa được xem là đã bàn giao:
+
+- `GET /api/weather/alerts/threshold`: đọc ngưỡng DB hoặc fallback cấu hình môi trường.
+- `GET /api/weather/sensor-health?device_id=station01&window_minutes=360`: mặc định UNKNOWN/chưa tích hợp; sau khi opt-in provider SA-03 mới có phân tích. Không có dữ liệu/dữ liệu cũ vẫn là UNKNOWN.
+- `GET /api/weather/benchmark?device_id=station01&source=open-meteo&hours=24`: trả tham chiếu thật; mặc định bias null/metrics rỗng. Sau khi opt-in provider SA-04 mới tính bias IoT trừ tham chiếu.
+
+`FORECAST_ENGINE_MODE=heuristic` và `ANALYTICS_ENGINE_MODE=disabled` là mặc định khi TV2/TV3 chưa merge. Hướng dẫn E2E có DB và MQTT namespace riêng: [integration_tests](../integration_tests/README.md).
+
+## Chế độ độc lập TV1
+
+Khi TV2/TV3 chưa bàn giao/merge, giữ `FORECAST_ENGINE_MODE=heuristic` và `ANALYTICS_ENGINE_MODE=disabled` (mặc định). Backend khởi động mà không cần import các thư mục AI/phân tích; `/api/weather/integrations` báo trạng thái cấu hình. Sensor-health trả UNKNOWN/chưa tích hợp, benchmark giữ dữ liệu tham chiếu thật và để bias null. Forecast có `forecast_engine`, `fallback_reason` và `rain_source` từng horizon; heuristic không phải mô hình đã đánh giá độ chính xác.
+
+Chỉ opt-in `auto` sau khi nhận module/artifact và kiểm tra hợp đồng; output AI được kiểm tra giá trị hữu hạn, xác suất, device và timezone **trước** khi xét cảnh báo. Tài liệu và schema bàn giao: [tv1_independent_handoff.md](../docs/architecture/tv1_independent_handoff.md).
 

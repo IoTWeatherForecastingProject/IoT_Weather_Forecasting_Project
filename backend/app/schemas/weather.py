@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Literal, Optional
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import AwareDatetime, BaseModel, Field, ConfigDict, field_validator
 
 
 class WeatherMeasurementCreate(BaseModel):
@@ -45,42 +45,52 @@ class WeatherMeasurementResponse(BaseModel):
 
 class ForecastHorizon(BaseModel):
     """Schema kết quả dự báo tại một mốc thời gian cụ thể."""
-    temperature_c: float = Field(..., description="Nhiệt độ dự báo (°C)", examples=[30.5])
-    rain_probability: float = Field(..., description="Xác suất mưa dự báo (0.0 đến 1.0)", examples=[0.72])
-    rain_level: str = Field(..., description="Mức độ mưa (Low, Medium, High)", examples=["High"])
+    temperature_c: float = Field(..., allow_inf_nan=False, description="Nhiệt độ dự báo (°C)", examples=[30.5])
+    rain_probability: float = Field(..., ge=0, le=1, allow_inf_nan=False, description="Xác suất mưa dự báo (0.0 đến 1.0)", examples=[0.72])
+    rain_level: Literal["Low", "Medium", "High"] = Field(..., description="Mức độ mưa (Low, Medium, High)", examples=["High"])
     rain_source: Literal["model", "heuristic"] = Field(..., description="Nguồn xác suất mưa: model đã huấn luyện hoặc heuristic")
 
     @field_validator("temperature_c", "rain_probability", mode="before")
     @classmethod
     def round_floats(cls, v):
+        if isinstance(v, (bool, str)):
+            raise ValueError("Forecast values must be numeric")
         if v is not None:
-            return round(float(v), 2)
+            return float(v)
         return v
 
 
-class ForecastResponse(BaseModel):
-    """Schema phản hồi kết quả dự báo thời tiết đa khung thời gian (+10m, +30m, +60m)."""
+class ForecastPayload(BaseModel):
+    """Provider boundary, validated before any external result can trigger an alert."""
     device_id: str = Field(..., description="Mã định danh trạm quan trắc", examples=["station01"])
-    generated_at: datetime = Field(..., description="Thời điểm tạo dự báo chuẩn UTC")
-    current_temperature: float = Field(..., description="Nhiệt độ hiện tại (°C)", examples=[31.2])
-    current_humidity: float = Field(..., description="Độ ẩm hiện tại (%)", examples=[78.0])
-    current_pressure: float = Field(..., description="Áp suất hiện tại (hPa)", examples=[1006.5])
+    generated_at: AwareDatetime = Field(..., description="Thời điểm tạo dự báo chuẩn UTC")
+    current_temperature: float = Field(..., allow_inf_nan=False, description="Nhiệt độ hiện tại (°C)", examples=[31.2])
+    current_humidity: float = Field(..., allow_inf_nan=False, description="Độ ẩm hiện tại (%)", examples=[78.0])
+    current_pressure: float = Field(..., allow_inf_nan=False, description="Áp suất hiện tại (hPa)", examples=[1006.5])
     plus_10m: ForecastHorizon = Field(..., description="Dự báo tại mốc +10 phút")
     plus_30m: ForecastHorizon = Field(..., description="Dự báo tại mốc +30 phút")
     plus_60m: ForecastHorizon = Field(..., description="Dự báo tại mốc +60 phút")
     alert_triggered: bool = Field(..., description="Cờ kích hoạt cảnh báo mưa 2 chiều", examples=[True])
     alert_message: Optional[str] = Field(None, description="Nội dung thông báo cảnh báo", examples=["Cảnh báo xác suất mưa cao trong 30-60 phút tới!"])
-    history_window_minutes: int = Field(..., description="Cửa sổ thời gian truy vấn lịch sử (phút)")
-    history_span_minutes: float = Field(..., description="Khoảng thời gian giữa mẫu đầu và cuối; không bảo đảm chuỗi không bị mất mẫu")
-    history_measurements: int = Field(..., description="Số mẫu của một trạm đã truyền vào inference")
-    rain_alert_threshold: float = Field(..., description="Ngưỡng dùng thống nhất cho inference và cảnh báo")
 
     @field_validator("current_temperature", "current_humidity", "current_pressure", mode="before")
     @classmethod
     def round_floats(cls, v):
+        if isinstance(v, (bool, str)):
+            raise ValueError("Forecast values must be numeric")
         if v is not None:
             return round(float(v), 2)
         return v
+
+
+class ForecastResponse(ForecastPayload):
+    """Public forecast including TV1 history and provider diagnostics."""
+    history_window_minutes: int = Field(..., description="Cửa sổ thời gian truy vấn lịch sử (phút)")
+    history_span_minutes: float = Field(..., description="Khoảng thời gian giữa mẫu đầu và cuối; không bảo đảm chuỗi không bị mất mẫu")
+    history_measurements: int = Field(..., description="Số mẫu của một trạm đã truyền vào inference")
+    rain_alert_threshold: float = Field(..., description="Ngưỡng dùng thống nhất cho inference và cảnh báo")
+    forecast_engine: Literal["local_heuristic", "external"]
+    fallback_reason: Optional[Literal["standalone_mode", "engine_unavailable", "engine_failed", "invalid_engine_output"]] = None
 
 
 class ThresholdUpdateRequest(BaseModel):

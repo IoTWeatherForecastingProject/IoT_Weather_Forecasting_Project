@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional
+from typing import List, Literal, Optional
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
@@ -12,10 +12,17 @@ from app.schemas.weather import (
     ForecastResponse,
     ThresholdUpdateRequest
 )
-from app.services.weather_forecast import build_forecast, NoRecentMeasurements
+from app.services.weather_forecast import build_forecast, NoRecentMeasurements, UnusableMeasurements
+from app.services import analytics
+from app.services.optional_providers import integration_status
 
 router = APIRouter(prefix="/api/weather", tags=["Weather"])
 logger = logging.getLogger(__name__)
+
+
+@router.get("/integrations", summary="Trạng thái cấu hình tích hợp TV2/TV3")
+def get_integrations():
+    return integration_status()
 
 
 @router.get(
@@ -110,6 +117,32 @@ def get_weather_forecast(
                 "message": str(exc),
             },
         ) from exc
+    except UnusableMeasurements as exc:
+        raise HTTPException(status_code=409, detail={"code": "sensor_data_unusable", "message": str(exc)}) from exc
+
+
+@router.get("/alerts/threshold", summary="Đọc ngưỡng cảnh báo hiện tại")
+def get_alert_threshold(db: Session = Depends(get_db)):
+    from app.config import settings
+    cfg = db.query(SystemConfig).filter(SystemConfig.config_key == "rain_alert_threshold").first()
+    return {"threshold": float(cfg.config_value) if cfg else settings.RAIN_ALERT_THRESHOLD}
+
+
+@router.get("/sensor-health", summary="Kiểm tra sức khỏe cảm biến theo lịch sử của trạm")
+def get_sensor_health(
+    device_id: str = Query("station01", min_length=1, max_length=50),
+    window_minutes: int = Query(360, ge=1, le=1440), db: Session = Depends(get_db),
+):
+    return analytics.sensor_health(db, device_id, window_minutes)
+
+
+@router.get("/benchmark", summary="Đối chuẩn trạm với dữ liệu thời tiết tham chiếu")
+def get_benchmark(
+    device_id: str = Query("station01", min_length=1, max_length=50),
+    source: Literal["open-meteo", "openweather"] = "open-meteo",
+    hours: int = Query(24, ge=1, le=168), db: Session = Depends(get_db),
+):
+    return analytics.benchmark(db, device_id, source, hours)
 
 
 @router.post(

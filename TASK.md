@@ -75,11 +75,15 @@ DỰ ÁN: IOT LOCAL WEATHER FORECASTING
 
 > **Cập nhật phần cứng đã chọn:** NodeMCU ESP8266 Amica, BMP280, DHT11, cảm biến mưa AO, OLED SH1106 1,3 inch, còi 5V, relay 1 kênh 5V và LED. Xem [danh sách mua](docs/hardware_shopping_list.md).
 
+> **Phạm vi chạy độc lập TV1 (27/10/2026):** Theo xác nhận người dùng, TV2/TV3 chưa hoàn tất và chưa merge; tạm chưa mua thêm linh kiện. TV1 mặc định heuristic + analytics disabled, có endpoint trạng thái tích hợp và kiểm tra hợp đồng output trước actuation. Bộ backend đạt 133 bài và E2E DB/topic riêng đạt khi chặn toàn bộ import TV2/TV3; trạm giả lập kiểm tra nhận lệnh và hết thời gian còi/LED. Đây là bằng chứng phần TV1, không nghiệm thu AI/Dashboard của thành viên khác hoặc toàn trạm thật. Xem [bàn giao độc lập](docs/architecture/tv1_independent_handoff.md).
+
 > **Chuẩn bị firmware (27/10/2026):** Đã build thành công môi trường `esp8266`/`nodemcuv2`; host tests kiểm tra bộ lọc lỗi/phục hồi, ngưỡng mưa, relay/LED và tràn `millis()`. Cấu hình cá nhân dùng `firmware/include/weather_config.h`. Các mục IOT-01 đến IOT-05 dưới đây vẫn chờ nghiệm thu trên board đủ phụ kiện; build thành công chưa chứng minh nguồn, A0, cảm biến hay MQTT liên thông thực tế. Quy trình: [firmware/README.md](firmware/README.md).
 
 > **BE-05 (27/10/2026):** Đã triển khai cục bộ cửa sổ lịch sử 76 phút cho một trạm, truyền ngưỡng cấu hình vào inference/fallback, giữ `rain_source` từng horizon và trả 404 khi không có dữ liệu gần đây. Có kiểm thử hồi quy riêng tại `backend/tests/test_forecast.py`. Chờ review/merge theo DoD; phần cảnh báo khép kín BE-06 vẫn chưa nghiệm thu. Chi tiết: [backend/README.md](backend/README.md).
 
 > **BE-06 (27/10/2026):** Đã triển khai cục bộ MQTT client dùng chung, topic theo trạm, kiểm tra PUBACK, cooldown từng trạm/kênh và tác vụ đánh giá nền 30 giây/lần cho dữ liệu mới trong 120 giây. Có kiểm thử tự động riêng cho cảnh báo và tác vụ nền. Telegram thật và còi/relay trên board vẫn chờ nghiệm thu; chưa đánh dấu hoàn thành DoD trước review/merge. Chi tiết vận hành và giới hạn một worker: [backend/README.md](backend/README.md).
+
+> **Tích hợp theo thứ tự phụ thuộc (27/10/2026):** Đã có hợp đồng dữ liệu v1, chính sách telemetry lỗi/khử lặp, GET ngưỡng/sensor-health/benchmark và runner migration 001–003. 113 test backend đạt; E2E với DB/topic riêng và kiểm tra Dashboard Edge desktop/mobile đã đạt. Firmware trạm và bài thử DHT11 độc lập đều build được. NodeMCU COM9 đã đọc chip/flash, sao lưu và nạp bài thử DHT11; đã xác nhận đọc dữ liệu và phục hồi sau reset. Còn chờ hoàn thiện cảm biến khác, hiệu chuẩn độ chính xác, weights và nghiệm thu toàn trạm. Chi tiết: [hợp đồng dữ liệu](docs/architecture/data_contract.md), [E2E](integration_tests/README.md).
 
 | Mã Task | Tên công việc | Mô tả chi tiết | Đầu ra (Deliverables) | Mức độ ưu tiên | Trạng thái |
 |---|---|---|---|:---:|:---:|

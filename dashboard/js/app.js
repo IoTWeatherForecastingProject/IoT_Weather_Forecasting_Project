@@ -444,7 +444,8 @@ async function fetchSensorHealth() {
         const checked = toMs(data.checked_at);
         const when = checked ? ` · bản ghi lúc ${timeLabel(checked)}` : "";
         renderHealth(data.status, data.anomalies,
-            data.status === "UNKNOWN" ? "Chưa có dữ liệu đo trong 6 giờ gần nhất"
+            data.status === "UNKNOWN" ? (data.reason === "stale_data"
+                ? `Dữ liệu trạm đã cũ${when}` : `Chưa có dữ liệu đo trong ${data.window_minutes || 360} phút gần nhất`)
                 : n ? `${n} dị thường${when}` : `Không phát hiện dị thường${when}`);
     } catch (err) {
         markBackend("health", false, err);

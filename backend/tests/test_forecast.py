@@ -67,8 +67,8 @@ def context(monkeypatch):
     monkeypatch.setattr(endpoints, "datetime", clock)
     monkeypatch.setattr(settings, "RAIN_ALERT_THRESHOLD", 0.70)
     monkeypatch.setitem(app.dependency_overrides, get_db, override_db)
-    monkeypatch.setattr(forecast_client, "HAS_AI_ENGINE", True)
-    monkeypatch.setattr(forecast_client, "ai_predict_forecast", predictor, raising=False)
+    monkeypatch.setattr(settings, "FORECAST_ENGINE_MODE", "auto")
+    monkeypatch.setattr(forecast_client, "load_forecast_predictor", Mock(return_value=predictor))
     monkeypatch.setattr(AlertService, "evaluate_and_trigger", trigger)
     yield SimpleNamespace(db=db, add=add, predictor=predictor, trigger=trigger,
                           client=TestClient(app))
@@ -181,13 +181,24 @@ def test_old_measurements_can_be_viewed_without_actuating_the_station(context):
     context.trigger.assert_not_called()
 
 
+def test_invalid_latest_measurement_does_not_reach_inference_or_actuation(context):
+    context.add().humidity = 125
+    response = context.client.get("/api/weather/forecast", params={"device_id": "target"})
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "sensor_data_unusable"
+    context.predictor.assert_not_called()
+    context.trigger.assert_not_called()
+
+
 @pytest.mark.parametrize("engine_available", [False, True])
 @pytest.mark.parametrize("threshold,expected_alert", [(0.18, True), (0.181, False)])
 def test_local_fallback_labels_sources_and_uses_inclusive_configured_threshold(
     monkeypatch, engine_available, threshold, expected_alert
 ):
-    monkeypatch.setattr(forecast_client, "HAS_AI_ENGINE", engine_available)
-    monkeypatch.setattr(forecast_client, "ai_predict_forecast", Mock(side_effect=RuntimeError("engine failed")), raising=False)
+    monkeypatch.setattr(settings, "FORECAST_ENGINE_MODE", "auto")
+    predictor = Mock(side_effect=RuntimeError("engine failed"))
+    loader = Mock(return_value=predictor) if engine_available else Mock(side_effect=ImportError("not merged"))
+    monkeypatch.setattr(forecast_client, "load_forecast_predictor", loader)
     result = ForecastClient.get_forecast([
         {"device_id": "target", "timestamp": NOW, "temperature": 31.5,
          "humidity": 75, "pressure": 1008, "rain_raw": 750, "rain_detected": 0}
@@ -209,3 +220,63 @@ def test_client_rejects_invalid_threshold(threshold):
 def test_client_rejects_empty_input():
     with pytest.raises(ValueError, match="recent_measurements"):
         ForecastClient.get_forecast([])
+
+
+def test_standalone_does_not_import_or_call_unmerged_engine(context, monkeypatch):
+    monkeypatch.setattr(settings, "FORECAST_ENGINE_MODE", "heuristic")
+    context.add()
+    result = context.client.get('/api/weather/forecast', params={'device_id': 'target'}).json()
+    forecast_client.load_forecast_predictor.assert_not_called()
+    assert result['forecast_engine'] == 'local_heuristic'
+    assert result['fallback_reason'] == 'standalone_mode'
+
+
+@pytest.mark.parametrize('field,value', [
+    ('rain_probability', -0.1), ('rain_probability', 1.01),
+    ('rain_probability', float('nan')), ('rain_probability', float('inf')),
+    ('rain_probability', True), ('rain_probability', '0.9'),
+    ('temperature_c', float('nan')), ('rain_source', 'unknown'), ('rain_level', 'storm'),
+])
+def test_bad_provider_horizon_is_replaced_before_actuation(context, field, value):
+    context.add()
+    def invalid(frame, threshold):
+        result = context.predictor.side_effect_original(frame, threshold)
+        result['plus_30m'][field] = value
+        return result
+    context.predictor.side_effect_original = context.predictor.side_effect
+    context.predictor.side_effect = invalid
+    result = context.client.get('/api/weather/forecast', params={'device_id':'target'})
+    assert result.status_code == 200
+    assert result.json()['fallback_reason'] == 'invalid_engine_output'
+    assert result.json()['forecast_engine'] == 'local_heuristic'
+    assert result.json()['alert_triggered'] is False
+    assert context.trigger.call_args.kwargs['rain_probability'] == 0.18
+
+
+@pytest.mark.parametrize('mutation', ['wrong_device', 'missing_horizon', 'naive_time', 'bad_current'])
+def test_provider_top_level_contract_is_checked(context, mutation):
+    context.add()
+    original = context.predictor.side_effect
+    def invalid(frame, threshold):
+        result = original(frame, threshold)
+        if mutation == 'wrong_device': result['device_id'] = 'other'
+        if mutation == 'missing_horizon': del result['plus_60m']
+        if mutation == 'naive_time': result['generated_at'] = '2026-10-27T11:00:00'
+        if mutation == 'bad_current': result['current_pressure'] = float('inf')
+        return result
+    context.predictor.side_effect = invalid
+    result = context.client.get('/api/weather/forecast', params={'device_id':'target'})
+    assert result.status_code == 200 and result.json()['fallback_reason'] == 'invalid_engine_output'
+
+
+def test_provider_cannot_override_threshold_decision(context):
+    context.add()
+    original = context.predictor.side_effect
+    def incorrect_flag(frame, threshold):
+        result = original(frame, threshold)
+        result['alert_triggered'] = True
+        return result
+    context.predictor.side_effect = incorrect_flag
+    result = context.client.get('/api/weather/forecast', params={'device_id':'target'}).json()
+    assert result['forecast_engine'] == 'external'
+    assert result['alert_triggered'] is False and result['alert_message'] is None

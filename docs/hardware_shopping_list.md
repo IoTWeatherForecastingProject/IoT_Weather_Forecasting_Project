@@ -2,13 +2,17 @@
 
 Cập nhật ngày 27/10/2026 theo những linh kiện người dùng đã xác nhận. Link Shopee bên dưới là **link tham khảo để chọn đúng chủng loại**, không phải đơn hàng đã được xác nhận về giá, tồn kho hay biến thể. Kiểm tra lại ảnh, thông số và lựa chọn phân loại trước khi thanh toán. Giá là khoảng dự trù, không gồm phí vận chuyển.
 
+**Ưu tiên hiện tại:** người dùng xác nhận chưa có BMP280, bộ mưa AO và OLED. Bổ sung BMP280 I2C 3,3V và bộ mưa AO hỗ trợ 3,3V trước để đủ dữ liệu đo thật; OLED SH1106 có thể thêm sau vì firmware tiếp tục chạy khi thiếu màn hình. NodeMCU, DHT11, relay D6/jumper H và còi qua COM/NO đã qua thử chức năng trên bàn; không mua lại. Cáp USB dữ liệu và pin dự phòng đã được dùng trong quá trình thử. Còi kêu rồi ngừng trong xung 3 giây; chưa đo điện áp/dòng hay nghiệm thu dài hạn.
+
+Đối chiếu chủng loại: [BMP280 breakout và chân I2C theo Adafruit](https://learn.adafruit.com/adafruit-bmp280-barometric-pressure-plus-temperature-sensor-breakout/pinouts), [module mưa AO/DO 3,3–5V theo SunFounder](https://docs.sunfounder.com/projects/umsk/en/latest/01_components_basic/15-component_raindrop.html). Đây là tài liệu của các module tham chiếu, không xác nhận mọi module bán dưới cùng tên có cùng sơ đồ/chân. Trước khi đấu cần ảnh/module cụ thể; đường AO → A0 vẫn phải kiểm tra mức điện áp riêng.
+
 ## Đã có — không mua lại
 
 | Số lượng | Linh kiện | Vai trò và lưu ý |
 | --- | --- | --- |
 | 1 | ESP8266 NodeMCU Amica | Vi điều khiển Wi-Fi đã chạy lab. Firmware chọn `esp8266`/`nodemcuv2`. |
 | 1 | DHT11 | Đo độ ẩm trong firmware chính; BMP280 đo nhiệt độ và áp suất. |
-| 1 | Buzzer 5V có dây | Còi cảnh báo. Thử nguồn 5V để xác định loại còi chủ động; nếu chỉ là loại thụ động thì cần sửa phần phát âm. |
+| 1 | Buzzer 5V có dây | Bill ghi buzzer 5V. Đã thử qua COM/NO: kêu suốt xung 3 giây rồi ngừng; hoạt động như còi chủ động khi cấp DC. |
 | 1 | Module relay 1 kênh, cuộn hút 5V `SRD-05VDC-SL-C` | Đóng/cắt đường cấp 5V cho còi. Xác minh các chân VCC/GND/IN, COM/NO/NC và mức kích HIGH/LOW trên chính module; chữ 5V trên relay chỉ xác nhận điện áp cuộn hút, không chứng minh ngõ IN nhận mức 3,3V. |
 | Nhiều | LED | Dùng một LED đỏ để cảnh báo, phần còn lại dự phòng. |
 | 1 | Breadboard cỡ MB-102 830 lỗ | Tận dụng để thử trên bàn; kiểm tra lỗ cắm, tính liên tục thanh nguồn. Chỉ bổ sung breadboard nếu thiếu chỗ. |
@@ -30,7 +34,7 @@ Cập nhật ngày 27/10/2026 theo những linh kiện người dùng đã xác 
 | 1 | Adapter USB 5V, tối thiểu 1A, dùng cho board và relay; tận dụng sạc sẵn có nếu phù hợp. | 30–80 nghìn ₫ | [Tìm nguồn 5V trên Shopee](https://shopee.vn/search?keyword=ngu%E1%BB%93n%20usb%205v%202a) |
 | Tùy chọn | Dây/đầu chia 5V–GND nếu không tiện lấy đường 5V USB từ chân VIN/VU của NodeMCU. | 15–35 nghìn ₫ | [Tìm đầu cấp 5V USB trên Shopee](https://shopee.vn/search?keyword=usb%205v%20%C4%91%E1%BA%A7u%20ra%20terminal%20v%C3%ADt) |
 
-**Để chạy firmware chính:** cần BMP280, cảm biến mưa và OLED; DHT11, relay, còi và ESP8266 đang có được sử dụng lại. Nếu đã có cáp USB/nguồn 5V và phụ kiện lắp ráp, không cần mua lại. Nguồn USB 5V cần đủ dòng cho cả NodeMCU, relay, còi và phần còn lại; ưu tiên nguồn 5V 2A có chất lượng. Chỉ lấy 5V từ chân VIN/VU nếu đã xác minh chân đó nối với đường 5V USB trên đúng board và đường cấp chịu được dòng tải. Adapter 12V–1A hiện có chỉ dùng qua bộ hạ áp DC-DC xuống 5V.
+**Để thu đủ dữ liệu thật bằng firmware chính:** cần BMP280 và cảm biến mưa; OLED bổ sung phần hiển thị và có thể lắp sau. DHT11, relay, còi và ESP8266 đang có được sử dụng lại. Nếu đã có cáp USB/nguồn 5V và phụ kiện lắp ráp, không cần mua lại. Nguồn USB 5V cần đủ dòng cho cả NodeMCU, relay, còi và phần còn lại; ưu tiên nguồn 5V 2A có chất lượng. Chỉ lấy 5V từ chân VIN/VU nếu đã xác minh chân đó nối với đường 5V USB trên đúng board và đường cấp chịu được dòng tải. Adapter 12V–1A hiện có chỉ dùng qua bộ hạ áp DC-DC xuống 5V.
 
 ## Chỉ mua khi lắp ngoài trời
 

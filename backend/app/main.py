@@ -13,6 +13,8 @@ from app.schemas.weather import HealthCheckResponse
 from app.ingestion.mqtt_worker import MQTTIngestionWorker
 from app.db.session import check_db_connection
 from app.services.forecast_monitor import ForecastMonitor
+from app.services.schema_migrations import apply_migrations
+from app.db import session as database_session
 
 # Cấu hình logging
 logging.basicConfig(
@@ -84,6 +86,8 @@ async def lifespan(app: FastAPI):
     global mqtt_worker, loop_ref
     loop_ref = asyncio.get_running_loop()
     logger.info("[STARTUP] Khoi dong ung dung FastAPI Weather Backend...")
+    if settings.AUTO_MIGRATE:
+        await asyncio.to_thread(apply_migrations, database_session.engine)
 
     # Khởi động MQTT Ingestion Worker
     mqtt_worker = MQTTIngestionWorker(broadcast_callback=on_mqtt_data_received)

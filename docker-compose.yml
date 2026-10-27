@@ -28,7 +28,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backend/migrations/001_init_schema.sql:/docker-entrypoint-initdb.d/001_init_schema.sql
+      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
 
 volumes:
   mosquitto_data:
