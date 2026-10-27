@@ -8,7 +8,7 @@
 - **Mục đích:** Chứng minh chuỗi kết nối từ cảm biến phần cứng qua mạng không dây đến CSDL và hiển thị trên Web SCADA đạt độ trễ thấp và ổn định liên tục.
 - **Các bước thực hiện:**
   1. Khởi động Docker (`docker-compose up -d`) và Backend Server (`uvicorn app.main:app`).
-  2. Bật nguồn trạm đo ESP32 hoặc chạy script giả lập `simulate_iot_device.py`.
+  2. Bật nguồn trạm đo ESP8266 hoặc chạy script giả lập `simulate_iot_device.py`.
   3. Mở giao diện `dashboard/index.html`.
 - **Hiện tượng & Tiêu chí đạt:**
   - Badge trạng thái trên Dashboard chuyển sang màu xanh: `WS CONNECTED`.
@@ -37,7 +37,7 @@
 - **Các bước thực hiện:**
   1. Trên Dashboard, thiết lập ngưỡng cảnh báo mưa là **70%** (hoặc giảm xuống **60%** bằng thanh trượt).
   2. Tạo tình huống áp suất giảm và độ ẩm tăng:
-     - *Nếu dùng trạm thật:* Dùng khăn ẩm hoặc giọt nước nhỏ lên cảm biến mưa, thổi hơi ẩm vào BME280.
+     - *Nếu dùng trạm thật:* Dùng khăn ẩm hoặc giọt nước nhỏ lên cảm biến mưa, thổi hơi ẩm vào DHT11.
      - *Nếu dùng máy tính:* Chạy script giả lập với cờ kích hoạt:
        ```bash
        python integration_tests/simulate_iot_device.py --simulate-rain

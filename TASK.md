@@ -14,7 +14,7 @@
 
 | Thành viên | Vai trò chính | Trách nhiệm cốt lõi (Core Responsibility) | Đầu ra chính (Key Deliverables) |
 |---|---|---|---|
-| **Thành viên 1 (TV1)** | **IoT + Backend Engineer** | ESP8266/ESP32, BME280, Rain Sensor, Firmware C++, MQTT Broker (QoS), PostgreSQL/TimescaleDB, FastAPI, WebSocket Live, Closed-loop Alert & Telegram Bot. | Trạm đo IoT ổn định, Hệ thống Backend Ingestion, CSDL Time-series, REST/WebSocket API, Cơ chế điều khiển phản hồi 2 chiều. |
+| **Thành viên 1 (TV1)** | **IoT + Backend Engineer** | ESP8266/ESP32, BMP280 + DHT11, Rain Sensor, Firmware C++, MQTT Broker (QoS), PostgreSQL/TimescaleDB, FastAPI, WebSocket Live, Closed-loop Alert & Telegram Bot. | Trạm đo IoT ổn định, Hệ thống Backend Ingestion, CSDL Time-series, REST/WebSocket API, Cơ chế điều khiển phản hồi 2 chiều. |
 | **Thành viên 2 (TV2)** | **Time-Series AI Engineer** | Common Time-Series Preprocessing, Feature Engineering hồi quy, Temperature Forecasting (Model 1), Model Benchmark (ML), Deep Learning (LSTM/GRU), Error Analysis, Forecast Inference Engine. | Clean Data Pipeline, Mô hình dự báo nhiệt độ (+10m, +30m, +60m), Báo cáo đối sánh ML vs Deep Learning, Module Inference độc lập. |
 | **Thành viên 3 (TV3)** | **AI + Analytics + Frontend Engineer** | Rain Probability Forecasting (Model 2), Probability Calibration, Sensor Anomaly & Drift Detection, OpenWeather Benchmark, Web Dashboard SCADA 2 chiều. | Mô hình xác suất mưa đã hiệu chuẩn, Thuật toán cảnh báo lỗi cảm biến, Báo cáo đối chuẩn sai số khí tượng, Giao diện Web SCADA realtime. |
 | **Cả 3 thành viên** | **System Integration & Testing** | Lắp ráp hộp trạm bảo vệ, Tích hợp liên thông End-to-End, Kiểm thử chịu lỗi (Fault tolerance), Thực nghiệm 3 kịch bản Demo, Viết báo cáo & Slide thuyết trình. | Trạm đo ngoài trời hoàn chỉnh, Hệ thống tích hợp toàn chuỗi, Báo cáo Đồ án tốt nghiệp và Video Demo. |
@@ -27,7 +27,7 @@
 DỰ ÁN: IOT LOCAL WEATHER FORECASTING
 │
 ├── [THÀNH VIÊN 1] MODULE 1 & 2: IoT Hardware, Firmware & Backend Infrastructure
-│   ├── Khảo sát, kiểm tra linh kiện (ESP8266/ESP32, BME280, Rain Sensor, OLED, Buzzer, LED)
+│   ├── Khảo sát, kiểm tra linh kiện (ESP8266/ESP32, BMP280, DHT11, Rain Sensor, OLED, Buzzer, LED)
 │   ├── Thiết kế sơ đồ nguyên lý mạch & lập trình Firmware C++ đọc cảm biến (lọc nhiễu moving average)
 │   ├── Lập trình WiFi & MQTT Client (Auto-reconnect, Publish payload JSON chu kỳ 5–10s)
 │   ├── Lập trình Firmware nhận lệnh cảnh báo 2 chiều (bật còi Buzzer, nháy LED, hiển thị OLED)
@@ -73,13 +73,13 @@ DỰ ÁN: IOT LOCAL WEATHER FORECASTING
 > **Phối hợp:** TV2 và TV3 hỗ trợ lắp ráp cơ khí hộp trạm và mua linh kiện ở Tuần 1.  
 > **Mục tiêu:** Xây dựng toàn bộ hạ tầng từ phần cứng thu thập đến máy chủ lưu trữ, cung cấp API và điều khiển phản hồi 2 chiều.
 
-> **Cập nhật phần cứng đang có:** ESP8266, DHT11, còi 5V, relay 1 kênh 5V và LED. Trạm hoàn chỉnh dùng ESP8266 + BME280 + cảm biến mưa + OLED; DHT11 chỉ dùng thử ban đầu. Xem [danh sách mua](docs/hardware_shopping_list.md).
+> **Cập nhật phần cứng đã chọn:** NodeMCU ESP8266 Amica, BMP280, DHT11, cảm biến mưa AO, OLED SH1106 1,3 inch, còi 5V, relay 1 kênh 5V và LED. Xem [danh sách mua](docs/hardware_shopping_list.md).
 
 | Mã Task | Tên công việc | Mô tả chi tiết | Đầu ra (Deliverables) | Mức độ ưu tiên | Trạng thái |
 |---|---|---|---|:---:|:---:|
-| `IOT-01` | Khảo sát & Test linh kiện | Kiểm tra ESP8266 hiện có, relay 5V có nhận mức điều khiển 3,3V, buzzer 5V chủ động/thụ động, LED; chọn BME280 I2C, cảm biến mưa AO chạy 3,3V, OLED SSD1306 và nguồn phù hợp. | Bảng test linh kiện hoạt động tốt | Cao | [ ] |
+| `IOT-01` | Khảo sát & Test linh kiện | Kiểm tra ESP8266 hiện có, relay 5V có nhận mức điều khiển 3,3V, buzzer 5V chủ động/thụ động, LED; chọn BMP280 I2C + DHT11, cảm biến mưa AO chạy 3,3V, OLED SH1106 1,3 inch và nguồn phù hợp. | Bảng test linh kiện hoạt động tốt | Cao | [ ] |
 | `IOT-02` | Thiết kế mạch & Lắp ráp trạm | Thiết kế sơ đồ nguyên lý mạch (Schematic); hàn cắm test board; lắp ráp trạm đo vào hộp bảo vệ ngoài trời (chống nắng mưa, thông thoáng cho cảm biến). | Sơ đồ nguyên lý + Hộp trạm hoàn chỉnh | Cao | [ ] |
-| `IOT-03` | Lập trình Firmware đọc cảm biến | Code C++/Arduino đọc BME280 và Rain Sensor; áp dụng bộ lọc trung bình trượt (Moving Average Filter) trên MCU để giảm nhiễu trước khi truyền đi. | Firmware đọc sensor chuẩn xác | Cao | [ ] |
+| `IOT-03` | Lập trình Firmware đọc cảm biến | Code C++/Arduino đọc BMP280, DHT11 và Rain Sensor; áp dụng bộ lọc trung bình trượt (Moving Average Filter) trên MCU để giảm nhiễu trước khi truyền đi. | Firmware đọc sensor chuẩn xác | Cao | [ ] |
 | `IOT-04` | Lập trình WiFi & MQTT Client | Xây dựng cơ chế Auto-reconnect khi rớt mạng WiFi/MQTT; đóng gói payload JSON chuẩn; publish định kỳ 5–10s lên topic `weather/station01/data`. | Firmware MQTT Client hoạt động ổn định | Cao | [ ] |
 | `IOT-05` | Firmware Điều khiển phản hồi | Subscribe topic `weather/station01/alert`; hiển thị OLED; đóng relay cấp 5V cho còi một lần trong 3 giây, LED nhấp nháy 10 giây khi nhận cảnh báo mưa cao. | Firmware phản hồi ngoại vi 2 chiều | Cao | [ ] |
 | `BE-01` | Cài đặt MQTT Broker & Đo đạc QoS | Cấu hình Mosquitto/EMQX; thiết lập User/Password, bảo mật Topic; thực nghiệm khảo sát độ trễ và tỉ lệ mất gói tin ở hai mức QoS 0 và QoS 1. | Broker bảo mật + Báo cáo so sánh QoS | Cao | [ ] |
@@ -116,7 +116,7 @@ DỰ ÁN: IOT LOCAL WEATHER FORECASTING
 |---|---|---|---|:---:|:---:|
 | `SA-01` | Rain Probability Forecasting (Model 2) | Xử lý bài toán mất cân bằng dữ liệu (Imbalanced dataset); tạo các đặc trưng khí quyển đặc thù cho mưa: tốc độ tụt áp suất khí quyển ($\Delta P/\Delta t$), tốc độ tăng độ ẩm ($\Delta H/\Delta t$), trạng thái cảm biến mưa; huấn luyện mô hình phân loại (RF / XGBoost Classifier). | Pipeline đặc trưng mưa + Model phân loại | Cao | [ ] |
 | `SA-02` | Probability Calibration & Curves | Căn chỉnh xác suất đầu ra bằng kỹ thuật **Platt Scaling** hoặc **Isotonic Regression** để xác suất $P \in [0, 1]$ phản ánh chính xác tần suất xuất hiện mưa thực tế; vẽ đường cong hiệu chuẩn (Calibration Curves); đánh giá qua Brier Score, ROC-AUC, PR-AUC. | Model mưa đã hiệu chuẩn + Đồ thị Calibration | Cao | [ ] |
-| `SA-03` | Sensor Anomaly & Drift Detection | Phát triển thuật toán phát hiện lỗi dữ liệu phần cứng IoT:<br>- Phát hiện đột biến dị thường (Spike/Out-of-range).<br>- Phát hiện giá trị bị kẹt (Frozen value / Sensor drift do cảm biến mưa đọng nước lâu ngày hoặc BME280 bị lỗi). | Module thuật toán Anomaly Detector | Cao | [ ] |
+| `SA-03` | Sensor Anomaly & Drift Detection | Phát triển thuật toán phát hiện lỗi dữ liệu phần cứng IoT:<br>- Phát hiện đột biến dị thường (Spike/Out-of-range).<br>- Phát hiện giá trị bị kẹt (Frozen value / Sensor drift do cảm biến mưa đọng nước lâu ngày hoặc BMP280/DHT11 bị lỗi). | Module thuật toán Anomaly Detector | Cao | [ ] |
 | `SA-04` | OpenWeather Benchmark & Bias Analysis | Viết script crawler định kỳ thu thập dữ liệu thời tiết tại cùng tọa độ từ OpenWeatherMap / Open-Meteo API; phân tích đối chuẩn sai số (Bias/Error Analysis) giữa cảm biến IoT giá rẻ của nhóm và trạm khí tượng chuẩn. | Báo cáo đối sánh chất lượng cảm biến + Dataset benchmark | Cao | [ ] |
 | `SA-05` | Web Dashboard SCADA | Phát triển giao diện Web Dashboard theo dõi thời gian thực (HTML5/CSS3/JS hoặc Vue/React + Tailwind):<br>- Thẻ chỉ số hiện tại (Nhiệt độ, Độ ẩm, Khí áp, Mưa).<br>- Biểu đồ chuỗi thời gian tương tác (Chart.js / ApexCharts) vẽ đồng thời dữ liệu trạm IoT và dữ liệu OpenWeatherMap.<br>- Khung hiển thị dự báo (+10m, +30m, +60m) kèm thanh đo xác suất mưa.<br>- Cảnh báo lỗi cảm biến từ task SA-03. | Giao diện Dashboard SCADA hoàn chỉnh, responsive | Cao | [ ] |
 | `SA-06` | Điều khiển 2 chiều & WebSocket | Kết nối kênh WebSocket từ Backend TV1 để cập nhật dữ liệu mượt mà không độ trễ; thiết kế form trên Dashboard cho phép người dùng tùy chỉnh ngưỡng cảnh báo mưa (ví dụ: đổi từ 70% sang 60%) gửi ngược về Backend. | Dashboard tương tác 2 chiều thời gian thực | Trung bình | [ ] |

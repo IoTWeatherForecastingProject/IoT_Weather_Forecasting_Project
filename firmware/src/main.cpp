@@ -5,20 +5,22 @@
  * 
  * Phụ trách: TV1 (IoT + Backend Engineer)
  * Các tính năng:
- * - Đọc BME280 (Nhiệt độ, Độ ẩm, Áp suất) qua I2C
+ * - Đọc BMP280 (nhiệt độ, áp suất) qua I2C và DHT11 (độ ẩm)
  * - Đọc Rain Sensor (Analog & Digital)
  * - Bộ lọc trung bình trượt (Moving Average Filter) 5 mẫu
  * - Non-blocking WiFi & MQTT Client Auto-reconnect
- * - Subscribe lệnh cảnh báo 2 chiều (bật còi Buzzer, nháy LED, OLED SSD1306)
+ * - Subscribe lệnh cảnh báo 2 chiều (bật còi Buzzer, nháy LED, OLED SH1106)
  * ==============================================================================
  */
 
 #include <Arduino.h>
+#include <math.h>
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
-#include <Adafruit_BME280.h>
+#include <Adafruit_BMP280.h>
+#include <DHT.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <Adafruit_SH110X.h>
 #include <ArduinoJson.h>
 
 #if defined(ESP8266)
@@ -39,10 +41,12 @@
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // --- Khởi tạo Đối tượng ---
-Adafruit_BME280 bme;
+Adafruit_BMP280 bmp;
+DHT dht(PIN_DHT, DHT11);
+bool bmpReady = false;
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
@@ -88,23 +92,25 @@ void setup() {
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
 
     // Khởi tạo màn hình OLED
-    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-        Serial.println("[OLED] Khong tim thay man hinh SSD1306!");
+    if (!display.begin(0x3C, true)) {
+        Serial.println("[OLED] Khong khoi tao duoc SH1106 tai 0x3C!");
     } else {
         display.clearDisplay();
         display.setTextSize(1);
-        display.setTextColor(SSD1306_WHITE);
+        display.setTextColor(SH110X_WHITE);
         display.setCursor(0, 10);
         display.println("IoT Weather Station");
         display.println("Connecting WiFi...");
         display.display();
     }
 
-    // Khởi tạo cảm biến BME280
-    if (!bme.begin(0x76, &Wire) && !bme.begin(0x77, &Wire)) {
-        Serial.println("[BME280] Khong tim thay cam bien BME280! Kiem tra day I2C.");
+    dht.begin();
+    // BMP280 I2C thường ở địa chỉ 0x76 hoặc 0x77.
+    bmpReady = bmp.begin(0x76) || bmp.begin(0x77);
+    if (!bmpReady) {
+        Serial.println("[BMP280] Khong tim thay cam bien BMP280! Kiem tra day I2C.");
     } else {
-        Serial.println("[BME280] Cam bien khoi tao thanh cong.");
+        Serial.println("[BMP280] Cam bien khoi tao thanh cong.");
     }
 
     // Khởi tạo WiFi & MQTT
@@ -143,18 +149,20 @@ void loop() {
         StaticJsonDocument<256> doc;
         doc["device_id"] = MQTT_CLIENT_ID;
         doc["timestamp_ms"] = currentMillis;
-        doc["temperature"] = serialized(String(temp, 2));
-        doc["humidity"] = serialized(String(hum, 2));
-        doc["pressure"] = serialized(String(press, 2));
+        doc["temperature"] = temp;
+        doc["humidity"] = hum;
+        doc["pressure"] = press;
         doc["rain_raw"] = rainRaw;
         doc["rain_detected"] = rainDetected;
 
         char jsonBuffer[256];
         serializeJson(doc, jsonBuffer);
 
-        if (mqttClient.connected()) {
+        if (mqttClient.connected() && isfinite(temp) && isfinite(hum) && isfinite(press)) {
             mqttClient.publish(TOPIC_WEATHER_DATA, jsonBuffer, true);
             Serial.printf("[MQTT PUB] %s -> %s\n", TOPIC_WEATHER_DATA, jsonBuffer);
+        } else if (!isfinite(temp) || !isfinite(hum) || !isfinite(press)) {
+            Serial.println("[SENSOR] Bo qua mau do: BMP280 hoac DHT11 chua co du lieu hop le.");
         }
 
         // Cập nhật OLED
@@ -206,9 +214,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 void readAndFilterSensors(float &outTemp, float &outHum, float &outPress, int &outRain) {
-    float rawTemp = bme.readTemperature();
-    float rawHum = bme.readHumidity();
-    float rawPress = bme.readPressure() / 100.0F; // Pa to hPa
+    float rawTemp = bmpReady ? bmp.readTemperature() : NAN;
+    float rawHum = dht.readHumidity();
+    float rawPress = bmpReady ? bmp.readPressure() / 100.0F : NAN; // Pa to hPa
     int rawRain = analogRead(PIN_RAIN_ANALOG);
 
     // Lưu vào bộ đệm trượt
@@ -223,16 +231,17 @@ void readAndFilterSensors(float &outTemp, float &outHum, float &outPress, int &o
 
     // Tính trung bình
     float sumT = 0, sumH = 0, sumP = 0;
+    int countT = 0, countH = 0, countP = 0;
     long sumR = 0;
     for (int i = 0; i < sensorBuffer.count; i++) {
-        sumT += sensorBuffer.temp[i];
-        sumH += sensorBuffer.hum[i];
-        sumP += sensorBuffer.press[i];
+        if (isfinite(sensorBuffer.temp[i])) { sumT += sensorBuffer.temp[i]; countT++; }
+        if (isfinite(sensorBuffer.hum[i])) { sumH += sensorBuffer.hum[i]; countH++; }
+        if (isfinite(sensorBuffer.press[i])) { sumP += sensorBuffer.press[i]; countP++; }
         sumR += sensorBuffer.rain[i];
     }
-    outTemp = sumT / sensorBuffer.count;
-    outHum = sumH / sensorBuffer.count;
-    outPress = sumP / sensorBuffer.count;
+    outTemp = countT ? sumT / countT : NAN;
+    outHum = countH ? sumH / countH : NAN;
+    outPress = countP ? sumP / countP : NAN;
     outRain = sumR / sensorBuffer.count;
 }
 
@@ -241,7 +250,7 @@ void updateOLED(float temp, float hum, float press, const char* statusMsg) {
     display.setCursor(0, 0);
     display.setTextSize(1);
     display.println("WEATHER STATION - S01");
-    display.drawLine(0, 10, 128, 10, SSD1306_WHITE);
+    display.drawLine(0, 10, 128, 10, SH110X_WHITE);
 
     display.setCursor(0, 15);
     display.printf("Temp: %.1f C\n", temp);

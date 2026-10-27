@@ -5,17 +5,17 @@
 > **Phối hợp:** TV2 và TV3 hỗ trợ cơ khí hộp bảo vệ trạm đo ở Tuần 1.  
 > **Các Task liên quan:** `IOT-01`, `IOT-02`, `IOT-03`, `IOT-04`, `IOT-05` (Xem chi tiết tại [TASK.md](../TASK.md)).
 
-**Trạm nhóm đang chuẩn bị:** ESP8266 hiện có, cùng DHT11, còi 5V, relay 1 kênh 5V và LED. Firmware chính vẫn cần BME280 để có dữ liệu áp suất, cảm biến mưa và OLED SSD1306. DHT11 chỉ dùng cho chương trình thử riêng; bản firmware này chưa đọc DHT11. Xem [danh sách cần mua](../docs/hardware_shopping_list.md). Mặc định PlatformIO đã chọn `esp8266`/`nodemcuv2`; kiểm tra đúng biến thể board thực tế trước khi nạp.
+**Cấu hình đã chọn:** NodeMCU ESP8266 Amica, BMP280 đo nhiệt độ/áp suất, DHT11 đo độ ẩm, cảm biến mưa AO, OLED SH1106 1,3 inch, relay 5V đóng/cắt còi 5V và LED. Xem [danh sách cần mua](../docs/hardware_shopping_list.md). PlatformIO chọn `esp8266`/`nodemcuv2`.
 
 ---
 
 ## 1. Mục tiêu & Phạm vi Kỹ thuật
 
 Xây dựng trạm đo ngoài trời có khả năng vận hành liên tục, ổn định trong môi trường thực tế:
-1. Đọc dữ liệu từ cảm biến áp suất/nhiệt/ẩm **BME280** và cảm biến phát hiện nước mưa (**Rain Sensor**).
+1. Đọc nhiệt độ/áp suất từ **BMP280**, độ ẩm từ **DHT11** và trạng thái nước mưa từ **Rain Sensor**.
 2. Lọc nhiễu tín hiệu trực tiếp trên vi điều khiển bằng bộ lọc trung bình trượt (**Moving Average Filter**).
 3. Đóng gói dữ liệu dạng JSON chuẩn và truyền về máy chủ qua giao thức **MQTT (QoS 1)** với cơ chế **Auto-reconnect** chống mất kết nối mạng.
-4. Lắng nghe lệnh cảnh báo 2 chiều (**Closed-loop Actuation**) từ Backend để hiển thị cảnh báo lên màn hình **OLED SSD1306**, kích hoạt **Còi Buzzer** và nhấp nháy **Đèn LED**.
+4. Lắng nghe lệnh cảnh báo 2 chiều (**Closed-loop Actuation**) từ Backend để hiển thị cảnh báo lên màn hình **OLED SH1106**, kích hoạt **Còi Buzzer** và nhấp nháy **Đèn LED**.
 
 ---
 
@@ -23,19 +23,22 @@ Xây dựng trạm đo ngoài trời có khả năng vận hành liên tục, �
 
 | Linh kiện | Loại giao tiếp | Chân trên Module | Chân ESP32 (Đề xuất) | Chân ESP8266 (NodeMCU) | Ghi chú |
 |---|---|---|---|---|---|
-| **BME280** | I2C | VCC | 3.3V | 3.3V | Tuyệt đối không cắm 5V |
+| **BMP280** | I2C | VCC | 3.3V | 3.3V | Chọn module tương thích 3,3V |
 | | | GND | GND | GND | Chung mass |
 | | | SCL | GPIO 22 | D1 (GPIO 5) | Kéo trở nội hoặc ngoài 4.7k |
 | | | SDA | GPIO 21 | D2 (GPIO 4) | Địa chỉ I2C: `0x76` hoặc `0x77` |
 | **Rain Sensor** | Analog / Digital | VCC | 3.3V / 5V | 3.3V | Cấp nguồn qua transistor nếu muốn tiết kiệm điện |
 | | | GND | GND | GND | Chung mass |
 | | | AO (Analog) | GPIO 34 (ADC1_6) | A0 (ADC0) | Đọc độ ướt (0: ướt sũng, 1023/4095: khô) |
-| | | DO (Digital) | GPIO 35 | D5 (GPIO 14) | Tín hiệu logic (LOW khi có mưa) |
-| **OLED SSD1306** | I2C (Chung bus) | SCL / SDA | GPIO 22 / 21 | D1 / D2 | Địa chỉ I2C: `0x3C` |
+| | | DO (Digital) | Không dùng | Không dùng | Firmware chỉ đọc AO |
+| **DHT11** | Digital | DATA | GPIO 14 | D5 (GPIO 14) | Cấp 3,3V; cảm biến trần cần điện trở kéo lên khoảng 10 kΩ |
+| **OLED SH1106 1,3 inch** | I2C (Chung bus) | GND/VCC/SCL/SDA | GND/3,3V/GPIO 22/GPIO 21 | GND/3V3/D1/D2 | Địa chỉ I2C dự kiến `0x3C`; xác nhận bằng I2C scanner nếu cần |
 | **Relay 5V → Buzzer 5V** | Digital Output / tiếp điểm | IN; COM–NO | GPIO 19 | D6 (GPIO 12) | D6 điều khiển IN, tiếp điểm đóng/cắt nguồn 5V cho còi. Xác minh relay nhận mức 3,3V; chỉnh HIGH/LOW trong `config.h`. |
 | **Status LED** | Digital Output | Anode (+) | GPIO 18 | D7 (GPIO 13) | Nối tiếp điện trở 220Ω - 330Ω |
 
-Chỉ chân **AO** của module cảm biến mưa được firmware đọc; chân DO trong bảng chưa được dùng. ESP8266 đọc ADC theo thang 0–1023. Giá trị ngưỡng mẫu trong `config.h.example` cần hiệu chỉnh bằng số đo khô/ướt. Kiểm tra giới hạn điện áp A0 của board đang có trước khi nối AO. BME280 cần thông khí ngoài trời nhưng tránh mưa tạt; phần điện còn lại đặt trong hộp bảo vệ.
+Chỉ chân **AO** của module cảm biến mưa được firmware đọc. ESP8266 đọc ADC theo thang 0–1023. Giá trị ngưỡng mẫu trong `config.h.example` cần hiệu chỉnh bằng số đo khô/ướt. Kiểm tra giới hạn điện áp A0 của board đang có trước khi nối AO. BMP280 và DHT11 cần thông khí nhưng tránh mưa tạt; phần điện còn lại đặt trong hộp bảo vệ.
+
+**Nguồn:** Cấp NodeMCU qua micro-USB 5V. BMP280, DHT11, OLED và module mưa tương thích 3,3V lấy từ chân 3V3; relay VCC và còi 5V lấy từ đường 5V USB qua chân VIN/VU **sau khi xác minh đường chân trên board** và nguồn USB đủ dòng. Nối 5V→COM relay, NO→cực dương còi, cực âm còi→GND. GND relay và các cảm biến nối chung GND ESP8266. Không cấp 5V cho GPIO hay chân 3V3; adapter 12V phải qua bộ hạ áp 5V.
 
 ---
 
@@ -109,10 +112,10 @@ firmware/
 ### Cách 2: Sử dụng Arduino IDE
 1. Cài đặt board ESP32 hoặc ESP8266 qua Boards Manager.
 2. Cài đặt các thư viện sau từ Library Manager:
-   - `Adafruit BME280 Library`
+   - `Adafruit BMP280 Library` và `DHT sensor library`
    - `PubSubClient` (Nick O'Leary)
    - `ArduinoJson` (Benoit Blanchon - phiên bản 6.x trở lên)
-   - `Adafruit SSD1306` & `Adafruit GFX Library`
+   - `Adafruit SH110X` & `Adafruit GFX Library`
 3. Đổi tên `src/main.cpp` thành `firmware.ino` và mở bằng Arduino IDE để nạp.
 
 ---

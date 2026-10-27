@@ -30,15 +30,15 @@
   #define PIN_I2C_SDA           21
   #define PIN_I2C_SCL           22
   #define PIN_RAIN_ANALOG       34
-  #define PIN_RAIN_DIGITAL      35
   #define PIN_BUZZER            19  // Relay IN or transistor input
   #define PIN_STATUS_LED        18
+  #define PIN_DHT               14
 #else
   // ESP8266 NodeMCU
   #define PIN_I2C_SDA           4   // D2
   #define PIN_I2C_SCL           5   // D1
   #define PIN_RAIN_ANALOG       A0  // A0
-  #define PIN_RAIN_DIGITAL      14  // D5
+  #define PIN_DHT               14  // D5
   #define PIN_BUZZER            12  // D6 -> relay IN; buzzer uses relay COM/NO
   #define PIN_STATUS_LED        13  // D7
 #endif

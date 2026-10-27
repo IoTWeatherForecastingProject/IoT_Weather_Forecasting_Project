@@ -10,8 +10,8 @@ Sơ đồ dưới đây mô tả luồng dữ liệu 2 chiều khép kín từ l
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Sensor as BME280 & Rain Sensor
-    participant ESP as ESP32 Station (TV1)
+    participant Sensor as BMP280, DHT11 & Rain Sensor
+    participant ESP as ESP8266 Station (TV1)
     participant MQTT as Mosquitto Broker (TV1)
     participant Worker as Ingestion Worker (TV1)
     participant DB as PostgreSQL DB (TV1)
