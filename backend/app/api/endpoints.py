@@ -1,6 +1,6 @@
 import logging
 import math
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -91,6 +91,25 @@ def get_weather_history(
     return list(reversed(records))
 
 
+def resolve_rain_threshold(db: Session) -> Tuple[float, str, Optional[datetime]]:
+    """Trả (threshold, source, updated_at); dùng chung cho GET ngưỡng và /forecast."""
+    config = (
+        db.query(SystemConfig)
+        .filter(SystemConfig.config_key == "rain_alert_threshold")
+        .first()
+    )
+    if config is not None:
+        try:
+            threshold = float(config.config_value)
+            if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+                raise ValueError("threshold outside [0, 1]")
+        except (TypeError, ValueError):
+            logger.warning("[CONFIG] Invalid rain_alert_threshold; using default")
+        else:
+            return threshold, "db", config.updated_at
+    return settings.RAIN_ALERT_THRESHOLD, "default", None
+
+
 @router.get(
     "/forecast",
     response_model=ForecastResponse,
@@ -124,8 +143,7 @@ def get_weather_forecast(
     forecast_data = ForecastClient.get_forecast(measurements)
 
     # Đọc cấu hình ngưỡng hiện tại
-    cfg = db.query(SystemConfig).filter(SystemConfig.config_key == "rain_alert_threshold").first()
-    current_threshold = float(cfg.config_value) if cfg else 0.70
+    current_threshold, _, _ = resolve_rain_threshold(db)
 
     # Kích hoạt Closed-loop alert nếu xác suất mưa >= ngưỡng
     max_prob = max(
@@ -180,23 +198,8 @@ def update_alert_threshold(
 )
 def get_alert_threshold(db: Session = Depends(get_db)) -> ThresholdResponse:
     """Lấy ngưỡng từ DB, dùng cấu hình mặc định khi thiếu hoặc không hợp lệ."""
-    config = (
-        db.query(SystemConfig)
-        .filter(SystemConfig.config_key == "rain_alert_threshold")
-        .first()
-    )
-    if config is not None:
-        try:
-            threshold = float(config.config_value)
-            if not math.isfinite(threshold):
-                raise ValueError("non-finite threshold")
-        except (TypeError, ValueError):
-            logger.warning("[CONFIG] Invalid rain_alert_threshold; using default")
-        else:
-            return ThresholdResponse(
-                threshold=threshold, source="db", updated_at=config.updated_at
-            )
-    return ThresholdResponse(threshold=settings.RAIN_ALERT_THRESHOLD, source="default")
+    threshold, source, updated_at = resolve_rain_threshold(db)
+    return ThresholdResponse(threshold=threshold, source=source, updated_at=updated_at)
 
 
 @router.get(
@@ -204,8 +207,9 @@ def get_alert_threshold(db: Session = Depends(get_db)) -> ThresholdResponse:
     response_model=SensorHealthResponse,
     summary="Kiểm tra sức khỏe cảm biến của trạm",
     description=(
-        "Phân tích các bản ghi có timestamp UTC trong window_minutes gần nhất "
-        "(10–1440 phút). Trả OK, WARNING, FAULT hoặc UNKNOWN nếu không có dữ liệu; "
+        "Phân tích các bản ghi có timestamp UTC trong [now - window_minutes, now] "
+        "(10–1440 phút); bản ghi có timestamp tương lai bị bỏ qua. "
+        "Trả OK, WARNING, FAULT hoặc UNKNOWN nếu không có dữ liệu; "
         "bao gồm dị thường, cảm biến kẹt giá trị và dấu hiệu đọng nước cảm biến mưa. "
         "Trả 503 khi bộ phát hiện dị thường không khả dụng."
     ),
@@ -220,12 +224,14 @@ def get_sensor_health(
     """Lọc dữ liệu theo timestamp UTC rồi kiểm tra sức khỏe cảm biến."""
     if not analytics_client.HAS_ANOMALY:
         raise HTTPException(503, detail="anomaly detector unavailable")
-    start = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(minutes=window_minutes)
     records = (
         db.query(WeatherMeasurement)
         .filter(
             WeatherMeasurement.device_id == device_id,
             WeatherMeasurement.timestamp >= start,
+            WeatherMeasurement.timestamp <= now,
         )
         .order_by(WeatherMeasurement.timestamp)
         .all()
@@ -254,8 +260,9 @@ def get_sensor_health(
     response_model=BenchmarkResponse,
     summary="Đối chuẩn cảm biến với dữ liệu thời tiết tham chiếu",
     description=(
-        "Lấy chuỗi reference_weather theo source trong hours gần nhất (1–168 giờ), "
-        "sắp xếp timestamp UTC tăng dần. Sai số IoT trừ tham chiếu tại mốc mới nhất "
+        "Lấy chuỗi reference_weather theo source trong [now - hours, now] (1–168 giờ, "
+        "bỏ qua timestamp tương lai), sắp xếp timestamp UTC tăng dần. "
+        "Sai số IoT trừ tham chiếu tại mốc mới nhất "
         "có nhiệt độ, độ ẩm hoặc áp suất, dùng trung bình IoT trong ±5 phút và "
         "ít nhất 3 mẫu cho từng biến. Không ghép được biến nào thì latest_bias=null. "
         "Trả 503 nếu chưa chạy migration 002."
@@ -270,13 +277,15 @@ def get_benchmark(
     db: Session = Depends(get_db),
 ) -> BenchmarkResponse:
     """Trả chuỗi tham chiếu và sai số ở mốc mới nhất có dữ liệu đối chuẩn."""
-    start = datetime.now(timezone.utc) - timedelta(hours=hours)
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(hours=hours)
     try:
         records = (
             db.query(ReferenceWeather)
             .filter(
                 ReferenceWeather.source == source,
                 ReferenceWeather.timestamp >= start,
+                ReferenceWeather.timestamp <= now,
             )
             .order_by(ReferenceWeather.timestamp)
             .all()

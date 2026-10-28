@@ -5,7 +5,10 @@ LƯU Ý: dữ liệu trong file này là DỮ LIỆU TỔNG HỢP chỉ để ki
 """
 
 import json
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -180,3 +183,20 @@ def test_cli_missing_file_exits_1(tmp_path):
 def test_cli_rejects_bad_args():
     with pytest.raises(SystemExit):
         main(["--iot-csv", "a", "--ref-csv", "b", "--tolerance-minutes", "0"])
+
+
+def test_alignment_has_no_crawler_dependency():
+    """Backend chỉ cài dependencies của nó: alignment không được kéo theo requests."""
+    code = (
+        "import sys; sys.modules['requests'] = None; "
+        "import openweather_benchmark.alignment; "
+        "assert 'openweather_benchmark.crawler' not in sys.modules"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr

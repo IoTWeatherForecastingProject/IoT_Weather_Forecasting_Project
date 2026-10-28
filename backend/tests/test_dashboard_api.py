@@ -1,8 +1,11 @@
 """Kiểm thử API Dashboard với PostgreSQL thật và dữ liệu tổng hợp độc lập."""
 
 import json
+import subprocess
+import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -131,7 +134,7 @@ def test_threshold_default_then_post(preserved_threshold: None) -> None:
     assert response.json()["updated_at"] is not None
 
 
-@pytest.mark.parametrize("value", ["invalid", "NaN", "Infinity"])
+@pytest.mark.parametrize("value", ["invalid", "NaN", "Infinity", "1.5", "-0.1"])
 def test_threshold_invalid_uses_default(
     preserved_threshold: None, value: str, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -144,6 +147,17 @@ def test_threshold_invalid_uses_default(
     assert response.json()["threshold"] == settings.RAIN_ALERT_THRESHOLD
     assert response.json()["updated_at"] is None
     assert "Invalid rain_alert_threshold" in caplog.text
+
+
+def test_threshold_default_from_settings(
+    preserved_threshold: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DB chưa có ngưỡng thì GET trả đúng RAIN_ALERT_THRESHOLD đang cấu hình."""
+    monkeypatch.setattr(settings, "RAIN_ALERT_THRESHOLD", 0.85)
+    response = client.get(f"{API}/alerts/threshold")
+    assert response.status_code == 200
+    assert response.json()["threshold"] == 0.85
+    assert response.json()["source"] == "default"
 
 
 def test_sensor_health_no_data(dashboard_data: tuple[str, str, str]) -> None:
@@ -195,6 +209,33 @@ def test_sensor_health_latest_fault(dashboard_data: tuple[str, str, str]) -> Non
         and anomaly["value"] == 120
         for anomaly in data["anomalies"]
     )
+
+
+def test_sensor_health_ignores_future_records(
+    dashboard_data: tuple[str, str, str],
+) -> None:
+    """Bản ghi bình thường mang timestamp ngày mai không được che mất FAULT hiện tại."""
+    device_id, _, _ = dashboard_data
+    now = datetime.now(UTC)
+    _add_iot(device_id, [now - timedelta(minutes=1)])
+    _add_iot(device_id, [now], temperature=120)
+    tomorrow = now + timedelta(days=1)
+    _add_iot(
+        device_id,
+        [tomorrow + timedelta(minutes=offset) for offset in (0, 1, 2)],
+        vary=True,
+    )
+    response = client.get(f"{API}/sensor-health", params={"device_id": device_id})
+    called_at = datetime.now(UTC)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "FAULT"
+    assert data["n_records"] == 2
+    assert any(
+        anomaly["type"] == "OUT_OF_RANGE" and anomaly["sensor"] == "temperature"
+        for anomaly in data["anomalies"]
+    )
+    assert datetime.fromisoformat(data["checked_at"]) <= called_at
 
 
 def test_sensor_health_time_window(dashboard_data: tuple[str, str, str]) -> None:
@@ -302,6 +343,26 @@ def test_benchmark_bias_and_inclusive_tolerance(
     assert bias["press_bias_hpa"] == 0
     assert bias["n_iot"] == 5
     assert datetime.fromisoformat(bias["reference_timestamp"]) == now
+
+
+def test_benchmark_ignores_future_reference(
+    dashboard_data: tuple[str, str, str],
+) -> None:
+    """Mốc tham chiếu tương lai bị loại; sai số tính ở mốc quá khứ gần nhất."""
+    device_id, source, _ = dashboard_data
+    past = datetime.now(UTC) - timedelta(minutes=10)
+    _add_reference(source, past)
+    _add_reference(source, past + timedelta(hours=2, minutes=10))
+    _add_iot(device_id, [past + timedelta(minutes=offset) for offset in (-1, 0, 1)])
+    response = client.get(
+        f"{API}/benchmark", params={"device_id": device_id, "source": source}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert [datetime.fromisoformat(r["timestamp"]) for r in data["reference"]] == [
+        past
+    ]
+    assert datetime.fromisoformat(data["latest_bias"]["reference_timestamp"]) == past
 
 
 def test_benchmark_two_samples(dashboard_data: tuple[str, str, str]) -> None:
@@ -517,3 +578,73 @@ def test_forecast_preserves_rain_source(
     predictor.assert_called_once()
     for minutes in (10, 30, 60):
         assert response.json()[f"plus_{minutes}m"]["rain_source"] == rain_source
+
+
+@pytest.mark.parametrize(
+    ("db_value", "default", "expected"),
+    [(None, 0.85, 0.85), ("0.42", 0.85, 0.42), ("invalid", 0.85, 0.85)],
+)
+def test_forecast_uses_same_threshold_as_get(
+    dashboard_data: tuple[str, str, str],
+    preserved_threshold: None,
+    monkeypatch: pytest.MonkeyPatch,
+    db_value: str | None,
+    default: float,
+    expected: float,
+) -> None:
+    """/forecast truyền vào AlertService đúng ngưỡng mà GET /alerts/threshold trả."""
+    device_id, _, _ = dashboard_data
+    monkeypatch.setattr(settings, "RAIN_ALERT_THRESHOLD", default)
+    if db_value is not None:
+        with get_db_context() as db:
+            db.add(
+                SystemConfig(config_key="rain_alert_threshold", config_value=db_value)
+            )
+    forecast = {
+        "device_id": device_id,
+        "generated_at": datetime.now(UTC),
+        "current_temperature": 30,
+        "current_humidity": 75,
+        "current_pressure": 1008,
+        "alert_triggered": False,
+        "alert_message": None,
+        **{
+            f"plus_{minutes}m": {
+                "temperature_c": 30,
+                "rain_probability": 0.1,
+                "rain_level": "Low",
+            }
+            for minutes in (10, 30, 60)
+        },
+    }
+    monkeypatch.setattr(forecast_client, "HAS_AI_ENGINE", True)
+    monkeypatch.setattr(
+        forecast_client,
+        "ai_predict_forecast",
+        MagicMock(return_value=forecast),
+        raising=False,
+    )
+    trigger = MagicMock()
+    monkeypatch.setattr(endpoints.AlertService, "evaluate_and_trigger", trigger)
+    response = client.get(f"{API}/forecast", params={"device_id": device_id})
+    assert response.status_code == 200
+    trigger.assert_called_once()
+    threshold = client.get(f"{API}/alerts/threshold").json()["threshold"]
+    assert trigger.call_args.kwargs["threshold"] == expected == threshold
+
+
+def test_bias_available_without_requests() -> None:
+    """Khi chỉ cài dependencies backend (không có requests) bias vẫn khả dụng."""
+    code = (
+        "import sys; sys.modules['requests'] = None; "
+        "from app.services import analytics_client; "
+        "assert analytics_client.HAS_BIAS and analytics_client.HAS_ANOMALY"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr

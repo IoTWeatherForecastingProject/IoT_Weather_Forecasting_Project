@@ -25,7 +25,7 @@ except ImportError as exc:
     logger.warning("[ANALYTICS] Anomaly detector unavailable: %s", exc)
 
 try:
-    from openweather_benchmark.bias_analysis import align_series
+    from openweather_benchmark.alignment import align_series
 
     HAS_BIAS = True
 except ImportError as exc:
