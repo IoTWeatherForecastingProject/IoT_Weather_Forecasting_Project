@@ -44,3 +44,22 @@ body {
     background: #475569;
 }
 
+
+/* Tab chọn biến của biểu đồ */
+.chart-tab {
+    background: #0f172a;
+    color: #94a3b8;
+    transition: background 0.2s, color 0.2s;
+}
+.chart-tab:hover {
+    color: #e2e8f0;
+}
+.chart-tab[aria-selected="true"] {
+    background: rgba(6, 182, 212, 0.15);
+    color: #22d3ee;
+}
+
+/* Không để nội dung dài (thông điệp anomaly) làm tràn ngang trên mobile */
+#health-list li {
+    overflow-wrap: anywhere;
+}
