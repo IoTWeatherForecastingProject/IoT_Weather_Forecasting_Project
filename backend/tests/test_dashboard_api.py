@@ -365,6 +365,53 @@ def test_benchmark_ignores_future_reference(
     assert datetime.fromisoformat(data["latest_bias"]["reference_timestamp"]) == past
 
 
+def test_benchmark_ignores_future_iot_samples(
+    dashboard_data: tuple[str, str, str],
+) -> None:
+    """Mẫu IoT tương lai không được bù số mẫu còn thiếu để tính sai số."""
+    device_id, source, _ = dashboard_data
+    base = datetime.now(UTC) - timedelta(seconds=30)
+    _add_reference(source, base)
+    _add_iot(device_id, [base])
+    _add_iot(
+        device_id,
+        [base + timedelta(minutes=m) for m in (1, 2, 3)],
+        temperature=50,
+    )
+    response = client.get(
+        f"{API}/benchmark", params={"device_id": device_id, "source": source}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["latest_bias"] is None
+    assert [datetime.fromisoformat(r["timestamp"]) for r in data["reference"]] == [
+        base
+    ]
+
+
+def test_benchmark_bias_excludes_future_iot_samples(
+    dashboard_data: tuple[str, str, str],
+) -> None:
+    """Sai số chỉ dùng ba mẫu IoT hợp lệ và bỏ qua các mẫu tương lai."""
+    device_id, source, _ = dashboard_data
+    base = datetime.now(UTC) - timedelta(seconds=30)
+    _add_reference(source, base)
+    _add_iot(device_id, [base - timedelta(minutes=m) for m in (2, 1, 0)])
+    _add_iot(
+        device_id,
+        [base + timedelta(minutes=m) for m in (1, 2, 3)],
+        temperature=50,
+    )
+    response = client.get(
+        f"{API}/benchmark", params={"device_id": device_id, "source": source}
+    )
+    assert response.status_code == 200
+    bias = response.json()["latest_bias"]
+    assert bias["temp_bias_c"] == pytest.approx(1.5)
+    assert bias["n_iot"] == 3
+    assert datetime.fromisoformat(bias["reference_timestamp"]) == base
+
+
 def test_benchmark_two_samples(dashboard_data: tuple[str, str, str]) -> None:
     """Hai mẫu không đủ ghép bất kỳ biến nào nên latest_bias là null."""
     device_id, source, _ = dashboard_data

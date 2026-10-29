@@ -265,6 +265,7 @@ def get_sensor_health(
         "Sai số IoT trừ tham chiếu tại mốc mới nhất "
         "có nhiệt độ, độ ẩm hoặc áp suất, dùng trung bình IoT trong ±5 phút và "
         "ít nhất 3 mẫu cho từng biến. Không ghép được biến nào thì latest_bias=null. "
+        "Mẫu IoT dùng để tính sai số cũng chỉ lấy timestamp <= now. "
         "Trả 503 nếu chưa chạy migration 002."
     ),
 )
@@ -334,6 +335,7 @@ def get_benchmark(
                 WeatherMeasurement.device_id == device_id,
                 WeatherMeasurement.timestamp >= latest["timestamp"] - tolerance,
                 WeatherMeasurement.timestamp <= latest["timestamp"] + tolerance,
+                WeatherMeasurement.timestamp <= now,
             )
             .order_by(WeatherMeasurement.timestamp)
             .all()
