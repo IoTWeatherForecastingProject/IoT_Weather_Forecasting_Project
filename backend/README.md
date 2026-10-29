@@ -82,6 +82,9 @@ ON weather_measurements (device_id, timestamp DESC);
 | `GET` | `/api/weather/history?limit=100` | Lấy dữ liệu lịch sử để vẽ biểu đồ | Mảng JSON các điểm dữ liệu gần nhất |
 | `GET` | `/api/weather/forecast` | Trả về kết quả dự báo (+10m, +30m, +60m) | `{ "temperature_forecast": {...}, "rain_probability": {...} }` |
 | `POST` | `/api/weather/alerts/threshold` | Cập nhật ngưỡng cảnh báo mưa 2 chiều | `{ "threshold": 0.65, "status": "updated" }` |
+| `GET` | `/api/weather/alerts/threshold` | Đọc ngưỡng từ DB hoặc cấu hình mặc định `RAIN_ALERT_THRESHOLD` (giá trị ngoài [0, 1] hoặc không hợp lệ dùng mặc định); `/forecast` dùng đúng ngưỡng này để kích hoạt cảnh báo | `{ "threshold": 0.70, "source": "db", "updated_at": "..." }` |
+| `GET` | `/api/weather/sensor-health?device_id=station01&window_minutes=360` | Sức khỏe cảm biến trong cửa sổ `[now - window, now]` (10–1440 phút, UTC); bỏ qua bản ghi có timestamp tương lai | `{ "device_id": "station01", "status": "OK", "checked_at": "...", "window_minutes": 360, "n_records": 30, "anomalies": [], "frozen_sensors": [], "rain_drift": false, "reason": null }` |
+| `GET` | `/api/weather/benchmark?device_id=station01&source=open-meteo&hours=24` | Chuỗi tham chiếu trong `[now - hours, now]` (1–168 giờ, bỏ qua timestamp tương lai) và sai số IoT − tham chiếu tại mốc mới nhất; mẫu IoT dùng để tính sai số cũng bỏ qua timestamp tương lai; cần migration 002 | `{ "device_id": "station01", "source": "open-meteo", "hours": 24, "reference": [{ "timestamp": "...", "temperature": 30.0, "humidity": 75.0, "pressure": 1008.0 }], "latest_bias": { "temp_bias_c": 1.5, "hum_bias_percent": null, "press_bias_hpa": null, "reference_timestamp": "...", "n_iot": 5 } }` |
 | `GET` | `/api/health` | Kiểm tra trạng thái Database & MQTT | `{ "database": "connected", "mqtt": "online" }` |
 | `WebSocket`| `/ws/weather/live` | Stream đẩy dữ liệu realtime mỗi 5s | Đẩy payload JSON ngay khi nhận từ MQTT |
 
