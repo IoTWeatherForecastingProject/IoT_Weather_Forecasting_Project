@@ -5,7 +5,7 @@ Phụ trách: TV3 (AI + Analytics + Frontend Engineer)
 Các Task: SA-03 (TASK.md)
 ==============================================================================
 
-Ba nhóm lỗi phần cứng được phát hiện:
+Bốn nhóm lỗi cảm biến và trạm được phát hiện:
 
 1. Bản ghi đơn lẻ (`check_measurement`):
    - MISSING_VALUE: thiếu trường / None / không phải số / NaN.
@@ -17,6 +17,8 @@ Ba nhóm lỗi phần cứng được phát hiện:
    tuyệt đối trong suốt cửa sổ thời gian (treo I2C, đọc lại buffer cũ).
 3. Cảm biến mưa đọng nước (`detect_rain_sensor_drift`): báo ướt liên tục quá
    lâu trong khi độ ẩm đã thấp và áp suất không giảm.
+4. Trạm mất dữ liệu (`analyze` với `now`): bản ghi mới nhất đã quá cũ so với
+   thời điểm kiểm tra, có thể do mất nguồn hoặc mất kết nối.
 
 Mọi cửa sổ đều tính theo THỜI GIAN (cột `timestamp`), không theo số dòng,
 vì chu kỳ gửi của trạm có thể thay đổi (5–10 s) và có thể mất mẫu.
@@ -66,6 +68,9 @@ class AnomalyConfig:
 
     # Cửa sổ chỉ hợp lệ khi dữ liệu phủ ít nhất tỷ lệ này của chiều dài cửa sổ
     min_window_coverage: float = 0.9
+
+    # Trạm mất khoảng 60 chu kỳ gửi 5 giây liên tiếp
+    stale_after_minutes: float = 5.0
 
     def bounds(self, field: str) -> tuple:
         return {
@@ -296,13 +301,16 @@ class SensorAnomalyDetector:
         return {"drift_detected": False, "reason": "Normal behavior", **details}
 
     @classmethod
-    def analyze(cls, df_history: pd.DataFrame, config: AnomalyConfig = DEFAULT_CONFIG) -> Dict[str, Any]:
+    def analyze(
+        cls, df_history: pd.DataFrame, config: AnomalyConfig = DEFAULT_CONFIG, now: Any = None
+    ) -> Dict[str, Any]:
         """
         Báo cáo sức khỏe cảm biến tổng hợp cho Backend / Dashboard (SA-05):
         kiểm tra bản ghi mới nhất (so với bản ghi liền trước), frozen value và đọng nước.
+        Nếu có `now`, kiểm tra thêm tuổi dữ liệu; thời gian không có múi giờ coi là UTC.
 
         status: "OK" | "WARNING" (frozen / drift — dữ liệu đáng ngờ)
-                     | "FAULT" (bản ghi mới nhất không hợp lệ)
+                     | "FAULT" (bản ghi mới nhất không hợp lệ hoặc trạm mất dữ liệu)
         """
         df = _prepare_history(df_history)
         if df.empty:
@@ -317,7 +325,21 @@ class SensorAnomalyDetector:
         if drift["drift_detected"]:
             anomalies.append(_anomaly(drift["anomaly_type"], "rain", drift["message"]))
 
-        if not latest["is_valid"]:
+        reference_time = _to_timestamp(now)
+        age_minutes = (
+            (reference_time - records[-1]["timestamp"]).total_seconds() / 60.0
+            if reference_time is not None else 0.0
+        )
+        stale = reference_time is not None and age_minutes > config.stale_after_minutes
+        if stale:
+            anomalies.append(_anomaly(
+                "STALE_DATA", "station",
+                f"Station has not sent data for {age_minutes:.1f} min",
+                age_minutes=round(age_minutes, 1),
+                last_seen=records[-1]["timestamp"].isoformat(),
+            ))
+
+        if stale or not latest["is_valid"]:
             status = "FAULT"
         elif anomalies:
             status = "WARNING"

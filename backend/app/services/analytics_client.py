@@ -51,7 +51,7 @@ def _json_value(value: Any) -> Any:
     return value
 
 
-def sensor_health(records: list[dict]) -> dict:
+def sensor_health(records: list[dict], now=None) -> dict:
     """Phân tích cửa sổ đã lọc và trả báo cáo sức khỏe dùng được trong JSON."""
     if not records:
         return {
@@ -62,7 +62,9 @@ def sensor_health(records: list[dict]) -> dict:
             "rain_drift": False,
             "reason": "no_data",
         }
-    result = SensorAnomalyDetector.analyze(pd.DataFrame(records))
+    result = SensorAnomalyDetector.analyze(pd.DataFrame(records), now=now)
+    if any(anomaly["type"] == "STALE_DATA" for anomaly in result.get("anomalies", [])):
+        result["reason"] = "stale_data"
     return _json_value(
         {
             "checked_at": None,

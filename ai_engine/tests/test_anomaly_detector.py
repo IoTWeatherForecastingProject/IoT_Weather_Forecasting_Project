@@ -193,3 +193,51 @@ def test_analyze_empty():
 def test_custom_config():
     cfg = AnomalyConfig(temp_max=35.0)
     assert not D.check_measurement(rec(t=36.0), config=cfg)["is_valid"]
+
+
+@pytest.mark.parametrize("now", [
+    "2026-10-01T01:00:24Z",
+    pd.Timestamp("2026-10-01T01:00:24"),
+    pd.Timestamp("2026-10-01T08:00:24+07:00").to_pydatetime(),
+])
+def test_analyze_stale_data(now):
+    df = make_history(40)
+    out = D.analyze(df, now=now)
+    assert out["status"] == "FAULT"
+    assert out["latest_valid"]
+    assert len(out["anomalies"]) == 1
+    stale = out["anomalies"][0]
+    assert stale["type"] == "STALE_DATA"
+    assert stale["sensor"] == "station"
+    assert stale["age_minutes"] == 20.4
+    assert stale["last_seen"] == df["timestamp"].iloc[-1].isoformat()
+
+
+@pytest.mark.parametrize("age_seconds,is_stale", [(300, False), (301, True), (-60, False)])
+def test_analyze_stale_threshold(age_seconds, is_stale):
+    df = pd.DataFrame([rec()])
+    now = pd.Timestamp(rec()["timestamp"]) + pd.Timedelta(seconds=age_seconds)
+    out = D.analyze(df, now=now)
+    assert (out["status"] == "FAULT") is is_stale
+    assert any(a["type"] == "STALE_DATA" for a in out["anomalies"]) is is_stale
+
+
+def test_analyze_without_now_does_not_check_age():
+    out = D.analyze(make_history(40))
+    assert out["status"] == "OK"
+    assert not any(a["type"] == "STALE_DATA" for a in out["anomalies"])
+
+
+def test_analyze_stale_keeps_frozen_anomalies():
+    df = make_history(40)
+    df["pressure"] = 1008.0
+    out = D.analyze(df, now="2026-10-01T01:00:00Z")
+    assert out["status"] == "FAULT"
+    assert out["frozen_sensors"] == ["pressure"]
+    assert {a["type"] for a in out["anomalies"]} == {"STALE_DATA", "FROZEN_VALUE"}
+
+
+def test_analyze_custom_stale_threshold():
+    out = D.analyze(pd.DataFrame([rec()]), AnomalyConfig(stale_after_minutes=30),
+                    now="2026-10-01T00:20:00Z")
+    assert out["status"] == "OK"

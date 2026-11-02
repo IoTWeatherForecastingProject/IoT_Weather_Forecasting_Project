@@ -441,10 +441,12 @@ async function fetchSensorHealth() {
         const data = await apiGet("/sensor-health", { device_id: CONFIG.DEVICE_ID, window_minutes: 360 });
         markBackend("health", true);
         const n = (data.anomalies || []).length;
+        const stale = (data.anomalies || []).find(anomaly => anomaly.type === "STALE_DATA");
         const checked = toMs(data.checked_at);
         const when = checked ? ` · bản ghi lúc ${timeLabel(checked)}` : "";
         renderHealth(data.status, data.anomalies,
-            data.status === "UNKNOWN" ? "Chưa có dữ liệu đo trong 6 giờ gần nhất"
+            stale ? `Trạm mất dữ liệu: bản ghi cuối cách đây ${stale.age_minutes} phút`
+                : data.status === "UNKNOWN" ? "Chưa có dữ liệu đo trong 6 giờ gần nhất"
                 : n ? `${n} dị thường${when}` : `Không phát hiện dị thường${when}`);
     } catch (err) {
         markBackend("health", false, err);

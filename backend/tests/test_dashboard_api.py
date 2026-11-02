@@ -211,6 +211,30 @@ def test_sensor_health_latest_fault(dashboard_data: tuple[str, str, str]) -> Non
     )
 
 
+@pytest.mark.parametrize("age_minutes,expected_status", [(20, "FAULT"), (1, "OK")])
+def test_sensor_health_data_age(
+    dashboard_data: tuple[str, str, str], age_minutes: int, expected_status: str
+) -> None:
+    """Trạm chỉ còn dữ liệu cũ phải FAULT; bản ghi mới vẫn OK."""
+    device_id, _, _ = dashboard_data
+    last_seen = datetime.now(UTC) - timedelta(minutes=age_minutes)
+    _add_iot(device_id, [last_seen])
+    response = client.get(f"{API}/sensor-health", params={"device_id": device_id})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == expected_status
+    assert data["n_records"] == 1
+    stale = [a for a in data["anomalies"] if a["type"] == "STALE_DATA"]
+    if age_minutes > 5:
+        assert len(stale) == 1
+        assert stale[0]["age_minutes"] == pytest.approx(age_minutes, abs=0.1)
+        assert datetime.fromisoformat(stale[0]["last_seen"]) == last_seen
+        assert data["reason"] == "stale_data"
+    else:
+        assert not stale
+        assert data["reason"] is None
+
+
 def test_sensor_health_ignores_future_records(
     dashboard_data: tuple[str, str, str],
 ) -> None:
@@ -297,7 +321,7 @@ def test_sensor_health_json_types(monkeypatch: pytest.MonkeyPatch) -> None:
         "frozen_sensors": [],
     }
     monkeypatch.setattr(
-        analytics_client.SensorAnomalyDetector, "analyze", lambda frame: result
+        analytics_client.SensorAnomalyDetector, "analyze", lambda frame, now=None: result
     )
     report = analytics_client.sensor_health([{"timestamp": datetime.now(UTC)}])
     json.dumps(report, allow_nan=False)

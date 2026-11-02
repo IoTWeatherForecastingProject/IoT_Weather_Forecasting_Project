@@ -211,6 +211,7 @@ def get_alert_threshold(db: Session = Depends(get_db)) -> ThresholdResponse:
         "(10–1440 phút); bản ghi có timestamp tương lai bị bỏ qua. "
         "Trả OK, WARNING, FAULT hoặc UNKNOWN nếu không có dữ liệu; "
         "bao gồm dị thường, cảm biến kẹt giá trị và dấu hiệu đọng nước cảm biến mưa. "
+        "Không có dữ liệu mới trong hơn 5 phút trả FAULT với STALE_DATA. "
         "Trả 503 khi bộ phát hiện dị thường không khả dụng."
     ),
 )
@@ -248,7 +249,7 @@ def get_sensor_health(
         for record in records
     ]
     return SensorHealthResponse(
-        **analytics_client.sensor_health(measurements),
+        **analytics_client.sensor_health(measurements, now=now),
         device_id=device_id,
         window_minutes=window_minutes,
         n_records=len(records),
