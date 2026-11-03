@@ -167,6 +167,117 @@ except Exception as e:
     FAILED += 1
 
 
+
+
+# ============================================================
+# TEST GROUP 10: Regression Tests -- Review Fix #1 & #3
+# ============================================================
+print("\n" + "=" * 60)
+print("  TEST GROUP 10: Regression -- Label Timing & Purge Leakage")
+print("=" * 60)
+
+# -- 10.1: Label timing dung khi chuoi co khoang trong ----------
+# Tao chuoi 200 phut, xoa 40 phut o giua tao khoang trong.
+# y_10 tai t phai = nhiet do tai t+10min (timestamp lookup, khong phai row shift).
+try:
+    import pandas as pd
+    from ml.preprocessing import TimeSeriesPreprocessor, PreprocessingConfig, generate_sample_iot_data
+    from ml.feature_engineering import TemperatureFeatureEngineer, FeatureConfig
+
+    df_200_raw = generate_sample_iot_data(n_minutes=200)
+    prep_gap = TimeSeriesPreprocessor(PreprocessingConfig())
+    df_200 = prep_gap.fit_transform(df_200_raw)
+    # Xoa khoang tu phut 80 den 119 de tao khoang trong 40 phut
+    gap_start = df_200.index[80]
+    gap_end   = df_200.index[119]
+    df_gapped = df_200[(df_200.index < gap_start) | (df_200.index > gap_end)].copy()
+
+    eng_gap = TemperatureFeatureEngineer(FeatureConfig(
+        lag_steps=[1, 2, 3, 6, 10, 30],
+        delta_steps=[1, 5, 10],
+        rolling_windows=[6, 10, 30, 60],
+        forecast_horizons=[10, 30, 60],
+    ))
+    df_gap_feat = eng_gap.fit_transform(df_gapped)
+
+    check(len(df_gap_feat) > 0,
+          "[Fix#1] fit_transform tren chuoi co khoang trong khong crash va co ket qua")
+    check("y_10" in df_gap_feat.columns and "y_30" in df_gap_feat.columns,
+          "[Fix#1] Cot nhan y_10, y_30 ton tai tren chuoi co khoang trong")
+
+    gap_label_nan = df_gap_feat[["y_10", "y_30", "y_60"]].isna().sum().sum()
+    check(gap_label_nan == 0,
+          "[Fix#1] Khong co NaN trong nhan sau fit_transform (nan=%d)" % gap_label_nan)
+
+    # Timestamp lookup correctness
+    valid_rows = [ts for ts in df_gap_feat.index
+                  if (ts + pd.Timedelta(minutes=10)) in df_gapped.index]
+    if valid_rows:
+        t0 = valid_rows[0]
+        t_tgt = t0 + pd.Timedelta(minutes=10)
+        y10_got = df_gap_feat.loc[t0, "y_10"]
+        y10_exp = df_gapped.loc[t_tgt, "temperature"]
+        check(abs(y10_got - y10_exp) < 0.01,
+              "[Fix#1] y_10 theo timestamp dung (got=%.4f, exp=%.4f)" % (y10_got, y10_exp))
+
+except Exception as e:
+    print("  [EXCEPTION] 10.1 label timing gap: %s" % e)
+    FAILED += 1
+
+# -- 10.2: Purge nghiem ngat -- khong ro ri nhan, khong force-keep --
+# Dung 700 phut du lieu qua generate_sample_iot_data+TimeSeriesPreprocessor
+# (du de lag_steps=[1..30]+rolling=[6,10,30,60] con lai hang sau dropna).
+try:
+    import warnings
+    import pandas as pd
+    from ml.preprocessing import TimeSeriesPreprocessor, PreprocessingConfig, generate_sample_iot_data
+    from ml.feature_engineering import TemperatureFeatureEngineer, FeatureConfig
+
+    df_700_raw = generate_sample_iot_data(n_minutes=700)
+    prep_700 = TimeSeriesPreprocessor(PreprocessingConfig())
+    df_700 = prep_700.fit_transform(df_700_raw)
+
+    eng_700 = TemperatureFeatureEngineer(FeatureConfig(
+        lag_steps=[1, 2, 3, 6, 10, 30],
+        delta_steps=[1, 5, 10],
+        rolling_windows=[6, 10, 30, 60],
+        forecast_horizons=[10, 30, 60],
+    ))
+    df_700_feat = eng_700.fit_transform(df_700)
+    X_7, y_7 = eng_700.get_Xy(df_700_feat)
+    max_h = 60
+
+    with warnings.catch_warnings(record=True) as w_list:
+        warnings.simplefilter("always")
+        X_tr_7, X_v_7, X_te_7, y_tr_7, y_v_7, y_te_7 = eng_700.train_val_test_split(
+            X_7, y_7["y_60"], purge_boundary=True
+        )
+
+    # Kiem tra train van co du lieu
+    check(len(X_tr_7) > 0, "[Fix#3] Train van co du lieu sau purge")
+
+    # Kiem tra val rong HOAC khong co ro ri nhan
+    if len(X_v_7) == 0:
+        check(True, "[Fix#3] Val rong sau strict purge (khong force-keep mau vi pham)")
+    elif len(X_te_7) > 0:
+        val_label_max = X_v_7.index[-1] + pd.Timedelta(minutes=max_h)
+        test_start    = X_te_7.index[0]
+        check(val_label_max <= test_start,
+              "[Fix#3] Nhan cuoi val <= test start (strict purge, khong ro ri)")
+    else:
+        check(True, "[Fix#3] Purge: test rong voi du lieu nho - hanh vi chap nhan duoc")
+
+    # Strict check: khong con bug force-keep
+    if len(X_v_7) > 0 and len(X_te_7) > 0:
+        val_last_label = X_v_7.index[-1] + pd.Timedelta(minutes=max_h)
+        check(val_last_label <= X_te_7.index[0],
+              "[Fix#3] Purge nghiem ngat: nhan val KHONG vuot ranh gioi test")
+
+except Exception as e:
+    print("  [EXCEPTION] 10.2 purge strict: %s" % e)
+    FAILED += 1
+
+
 # ============================================================
 # KẾT QUẢ
 # ============================================================

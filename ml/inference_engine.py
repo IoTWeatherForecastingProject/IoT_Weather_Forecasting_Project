@@ -84,6 +84,80 @@ class TemperatureForecast:
             "error_msg":   self.error_msg,
         }
 
+    def to_backend_response(
+        self,
+        device_id: str = "station01",
+        current_temperature: Optional[float] = None,
+        current_humidity: Optional[float] = None,
+        current_pressure: Optional[float] = None,
+        rain_probability: Optional[Dict[str, float]] = None,
+        rain_source: Optional[str] = None,
+        alert_threshold: float = 0.70,
+    ) -> Dict[str, Any]:
+        """
+        Fix #4: Adapter chuyển TemperatureForecast → ForecastResponse schema của TV1.
+
+        Maps sang đúng contract ForecastResponse (backend/app/schemas/weather.py):
+            device_id, generated_at, current_temperature, current_humidity,
+            current_pressure, plus_10m, plus_30m, plus_60m,
+            alert_triggered, alert_message.
+
+        Args:
+            device_id:            Mã trạm quan trắc (mặc định 'station01').
+            current_temperature:  Nhiệt độ đo hiện tại (°C). Nếu None dùng t_plus_10min làm ước lượng.
+            current_humidity:     Độ ẩm hiện tại (%). Mặc định 70.0.
+            current_pressure:     Áp suất hiện tại (hPa). Mặc định 1013.25.
+            rain_probability:     Dict {10: float, 30: float, 60: float} từ TV3.
+                                  Nếu None → dùng heuristic tụt áp.
+            rain_source:          Nguồn dự báo mưa: 'model' hoặc 'heuristic'.
+            alert_threshold:      Ngưỡng xác suất mưa để kích hoạt cảnh báo (mặc định 0.70).
+
+        Returns:
+            Dict khớp hoàn toàn với ForecastResponse schema của TV1.
+        """
+        import datetime as _dt
+
+        rain_prob = rain_probability or {}
+
+        def _rain_level(p: float) -> str:
+            if p >= 0.70:
+                return "High"
+            if p >= 0.30:
+                return "Medium"
+            return "Low"
+
+        def _horizon_dict(temp_c: float, h: int) -> Dict[str, Any]:
+            p = round(float(rain_prob.get(h, 0.15)), 2)
+            return {
+                "temperature_c":   round(temp_c, 2),
+                "rain_probability": p,
+                "rain_level":      _rain_level(p),
+                "rain_source":     rain_source or ("model" if rain_probability else "heuristic"),
+            }
+
+        max_rain = max(
+            float(rain_prob.get(10, 0.0)),
+            float(rain_prob.get(30, 0.0)),
+            float(rain_prob.get(60, 0.0)),
+        )
+        alert = max_rain >= alert_threshold
+
+        return {
+            "device_id":           device_id,
+            "generated_at":        _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            "current_temperature": round(float(current_temperature if current_temperature is not None else self.t_plus_10min), 2),
+            "current_humidity":    round(float(current_humidity if current_humidity is not None else 70.0), 2),
+            "current_pressure":    round(float(current_pressure if current_pressure is not None else 1013.25), 2),
+            "plus_10m":            _horizon_dict(self.t_plus_10min, 10),
+            "plus_30m":            _horizon_dict(self.t_plus_30min, 30),
+            "plus_60m":            _horizon_dict(self.t_plus_60min, 60),
+            "alert_triggered":     alert,
+            "alert_message":       (
+                f"Canh bao xac suat mua cao ({max_rain:.0%}) trong 60 phut toi!"
+                if alert else None
+            ),
+        }
+
 
 @dataclass
 class CombinedForecast:
@@ -143,6 +217,9 @@ class TemperatureInferenceEngine:
         # Dùng chung pipeline Feature Engineering với lúc train (ML-02)
         self._feature_engineer = TemperatureFeatureEngineer(FeatureConfig())
 
+        # Fix #2: tracking data coverage của lần predict() gần nhất
+        self._last_coverage: float = 1.0
+
         # Load models và schema
         self._load_schema()
         self._load_models()
@@ -200,7 +277,14 @@ class TemperatureInferenceEngine:
 
             latency_ms = (time.perf_counter() - t_start) * 1000
             model_name = self._model_names.get(HORIZONS[0], "Persistence")
-            confidence = "normal" if len(self._models) == len(HORIZONS) else "degraded"
+
+            # Fix #2: confidence phản ánh cả mức độ model loading lẫn data coverage
+            COVERAGE_DEGRADED_THRESHOLD = 0.70   # < 70% dữ liệu thực → degraded
+            coverage = getattr(self, "_last_coverage", 1.0)
+            if len(self._models) < len(HORIZONS) or coverage < COVERAGE_DEGRADED_THRESHOLD:
+                confidence = "degraded"
+            else:
+                confidence = "normal"
 
             return TemperatureForecast(
                 t_plus_10min = round(preds[10], 3),
@@ -309,8 +393,23 @@ class TemperatureInferenceEngine:
         # Bất kể cảm biến gửi 5s, 10s hay 1min, toàn bộ được đưa về trung bình 1 phút
         df_1min = df[["temperature", "humidity", "pressure", "rain_raw"]].resample("1min").mean()
 
-        # Nội suy tuyến tính cho các khoảng trống ngắn, sau đó ffill/bfill
-        df_1min = df_1min.interpolate(method="linear").ffill().bfill()
+        # Fix #2: Giới hạn độ dài khoảng trống được nội suy.
+        # Chỉ nội suy tuyến tính cho các khoảng trống <= MAX_INTERP_GAP phút.
+        # Khoảng trống dài hơn sẽ giữ NaN, được đếm vào vùng thiếu dữ liệu.
+        MAX_INTERP_GAP_MINUTES = 15   # Ngưỡng: khoảng trống tối đa được nội suy
+
+        # Tính data coverage TRƯỚC khi nội suy (số phút có dữ liệu thực)
+        n_real_points = int(df_1min["temperature"].notna().sum())
+        n_total_minutes = len(df_1min)
+        coverage = n_real_points / n_total_minutes if n_total_minutes > 0 else 0.0
+
+        # Nội suy có giới hạn (limit=số bước tối đa được fill liên tiếp)
+        df_1min = df_1min.interpolate(method="linear", limit=MAX_INTERP_GAP_MINUTES)
+        # ffill/bfill chỉ cho các NaN đầu/cuối còn sót (tối đa 2 bước)
+        df_1min = df_1min.ffill(limit=2).bfill(limit=2)
+
+        # Lưu coverage để predict() dùng xác định mức confidence
+        self._last_coverage = coverage
 
         # Giới hạn vật lý an toàn
         df_1min["temperature"] = df_1min["temperature"].clip(-10.0, 60.0)
@@ -319,7 +418,16 @@ class TemperatureInferenceEngine:
 
         if len(df_1min) < self.min_history_minutes:
             raise ValueError(
-                f"Sau khi resample 1min chỉ được {len(df_1min)} bước, cần ít nhất {self.min_history_minutes} bước."
+                f"Sau khi resample 1min chi duoc {len(df_1min)} buoc, can it nhat {self.min_history_minutes} buoc."
+            )
+
+        # Coverage thấp → fallback ngay (không đủ dữ liệu thực để tin tưởng kết quả)
+        COVERAGE_FALLBACK_THRESHOLD = 0.30   # < 30% dữ liệu thực → fallback
+        if coverage < COVERAGE_FALLBACK_THRESHOLD:
+            raise ValueError(
+                f"Du lieu thuc qua it: chi {n_real_points}/{n_total_minutes} phut co du lieu "
+                f"(coverage={coverage:.1%} < {COVERAGE_FALLBACK_THRESHOLD:.0%}). "
+                "Lich su khong du tin cay de chay model."
             )
 
         return df_1min
@@ -446,3 +554,62 @@ def predict_combined_forecast(
     """Hàm tổng hợp kết hợp nhiệt độ (TV2) và xác suất mưa (TV3) cho TV1."""
     engine = get_engine(model_dir)
     return engine.predict_combined(recent_data, rain_probability).to_dict()
+
+
+def predict_forecast_for_backend(
+    recent_data:      Union[pd.DataFrame, List[Dict[str, Any]]],
+    device_id:        str = "station01",
+    rain_probability: Optional[Dict[str, float]] = None,
+    rain_source:      Optional[str] = None,
+    alert_threshold:  float = 0.70,
+    model_dir:        Union[str, Path] = MODEL_DIR,
+) -> Dict[str, Any]:
+    """
+    Fix #4: Hàm API bàn giao TV1 — trả về đúng ForecastResponse schema.
+
+    Thay thế predict_forecast() khi TV1 cần kết quả theo ForecastResponse schema
+    (backend/app/schemas/weather.py), bao gồm các trường:
+        device_id, generated_at, current_temperature, current_humidity,
+        current_pressure, plus_10m, plus_30m, plus_60m,
+        alert_triggered, alert_message.
+
+    Args:
+        recent_data:      Danh sách bản ghi cảm biến gần nhất (>= 90 phút).
+        device_id:        Mã trạm quan trắc (mặc định 'station01').
+        rain_probability: Dict {10: float, 30: float, 60: float} từ TV3 rain model.
+                          Nếu None → dùng heuristic.
+        rain_source:      Nguồn dự báo mưa ('model' hoặc 'heuristic').
+        alert_threshold:  Ngưỡng xác suất mưa để kích hoạt cảnh báo.
+        model_dir:        Thư mục model.
+
+    Returns:
+        Dict khớp hoàn toàn với ForecastResponse schema của TV1.
+    """
+    engine = get_engine(model_dir)
+    forecast = engine.predict(recent_data)
+
+    # Lấy thông tin hiện tại từ dữ liệu đầu vào
+    cur_temp = cur_hum = cur_press = None
+    try:
+        if isinstance(recent_data, list) and recent_data:
+            last = recent_data[-1]
+            cur_temp  = float(last.get("temperature", forecast.t_plus_10min))
+            cur_hum   = float(last.get("humidity",    70.0))
+            cur_press = float(last.get("pressure",    1013.25))
+        elif isinstance(recent_data, pd.DataFrame) and len(recent_data) > 0:
+            last = recent_data.iloc[-1]
+            cur_temp  = float(last.get("temperature", forecast.t_plus_10min))
+            cur_hum   = float(last.get("humidity",    70.0))
+            cur_press = float(last.get("pressure",    1013.25))
+    except Exception:
+        pass
+
+    return forecast.to_backend_response(
+        device_id=device_id,
+        current_temperature=cur_temp,
+        current_humidity=cur_hum,
+        current_pressure=cur_press,
+        rain_probability=rain_probability,
+        rain_source=rain_source,
+        alert_threshold=alert_threshold,
+    )

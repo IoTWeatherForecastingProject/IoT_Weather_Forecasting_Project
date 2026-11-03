@@ -163,6 +163,13 @@ class TemperatureFeatureEngineer:
         """
         Tạo toàn bộ đặc trưng VÀ các nhãn target tương lai (cho training).
 
+        Thứ tự xử lý đúng (Fix #1 - label timing):
+            1. Tạo nhãn target theo TIMESTAMP (t + h phút) trên lưới NGUYÊN VẸN
+               TRƯỚC KHI bất kỳ hàng nào bị xóa do NaN từ lag/rolling.
+            2. Gắn nhãn vào DataFrame theo index (timestamp lookup).
+            3. Trích xuất features (sẽ drop NaN đầu chuỗi do lag/rolling).
+            4. Join nhãn đã tạo vào features theo timestamp → không lệch.
+
         Args:
             df: DataFrame với DatetimeIndex (đầu ra của TimeSeriesPreprocessor).
                 Phải chứa ít nhất cột 'temperature'.
@@ -172,18 +179,28 @@ class TemperatureFeatureEngineer:
             Các hàng có NaN (do lag đầu chuỗi + target cuối chuỗi) đã được tự động drop.
         """
         logger.info("=== BẮT ĐẦU FEATURE ENGINEERING (fit_transform) ===")
-        # 1. Trích xuất features dùng chung
-        df = self.transform_features(df)
 
-        # 2. Sinh các nhãn target y tương lai (shift -h)
-        df = self._add_target_labels(df)
+        # BƯỚC 1: Tạo nhãn target theo TIMESTAMP trên lưới NGUYÊN VẸN
+        # Phải làm TRƯỚC transform_features() vì transform sẽ drop hàng NaN.
+        # Nếu làm sau, shift(-h) theo chỉ số hàng sẽ lệch khi chuỗi có khoảng trống.
+        # Truyền df.copy() để _add_target_labels_by_timestamp không ảnh hưởng df gốc.
+        df_labels = self._add_target_labels_by_timestamp(df.copy())
+        # df_labels chỉ chứa các cột y_* (index = DatetimeIndex gốc)
 
-        # 3. Drop các hàng cuối cùng bị NaN do target shift(-h)
+        # BƯỚC 2: Trích xuất features dùng chung (có thể drop hàng NaN đầu chuỗi)
+        # Truyền df.copy() để đảm bảo transform_features nhận df sạch (không có y_* columns)
+        df_feat = self.transform_features(df.copy())
+
+        # BƯỚC 3: Ghép nhãn vào features theo timestamp (index lookup)
+        # Chỉ những timestamp nào còn trong df_feat mới lấy nhãn tương ứng
+        df = df_feat.join(df_labels, how="left")
+
+        # BƯỚC 4: Drop các hàng thiếu nhãn (label NaN do timestamp target vượt cuối chuỗi)
         n_before = len(df)
         df = df.dropna()
         n_after = len(df)
         logger.info(
-            "Drop NaN đuôi chuỗi do target shift(-h): %d → %d hàng (mất %d)",
+            "Drop NaN (lag đầu + target cuối chuỗi): %d → %d hàng (mất %d)",
             n_before, n_after, n_before - n_after
         )
 
@@ -192,6 +209,40 @@ class TemperatureFeatureEngineer:
             if not c.startswith("y_") and c != self.config.target_col
         ]
         return df
+
+    def _add_target_labels_by_timestamp(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        [F-safe] Tạo nhãn target y_h = T(t + h phút) bằng timestamp lookup.
+
+        Khác với _add_target_labels() dùng shift(-h) theo chỉ số hàng,
+        phương thức này tra cứu nhiệt độ tại đúng thời điểm t + h*1min
+        trên lưới gốc, nên đúng ngay cả khi chuỗi có khoảng trống.
+
+        Args:
+            df: DataFrame với DatetimeIndex 1-phút và cột 'temperature'.
+
+        Returns:
+            DataFrame chỉ chứa các cột y_10, y_30, y_60 (cùng index với df).
+        """
+        col = self.config.target_col
+        T = df[col]
+        label_df = pd.DataFrame(index=df.index)
+
+        for h in self.config.forecast_horizons:
+            label_name = f"y_{h}"
+            # Tính timestamp mục tiêu cho mỗi hàng
+            target_times = df.index + pd.Timedelta(minutes=h)
+            # Reindex về lưới gốc để tra cứu giá trị (NaN nếu ngoài phạm vi)
+            label_df[label_name] = T.reindex(target_times).values
+            logger.debug(
+                "Target '%s': lookup T(t + %d min) theo timestamp", label_name, h
+            )
+
+        logger.info(
+            "[F-safe] Target labels by timestamp: %s",
+            [f"y_{h}" for h in self.config.forecast_horizons]
+        )
+        return label_df
 
     def get_Xy(
         self,
@@ -270,9 +321,24 @@ class TemperatureFeatureEngineer:
         max_h = max(self.config.forecast_horizons) if self.config.forecast_horizons else 60
 
         if purge_boundary:
-            # Loại bỏ max_h bước cuối của train và val để nhãn không vắt sang tập sau
+            # Fix #3: Loại bỏ NGHIÊM NGẶT max_h bước cuối của train và val.
+            # KHÔNG dùng max(n_train+1, ...) để force-keep mẫu val gây rò rỉ.
+            # Nếu purge khiến val rỗng → cảnh báo và trả về val rỗng thay vì giữ
+            # mẫu vi phạm khoảng cách an toàn.
+            import warnings as _warnings
+
             train_end = max(1, n_train - max_h)
-            val_end   = max(n_train + 1, n_val - max_h)
+            val_end   = n_val - max_h  # Nghiêm ngặt: không có sàn n_train+1
+
+            if val_end <= n_train:
+                # Purge làm validation rỗng — cảnh báo, trả về tập rỗng
+                _warnings.warn(
+                    f"[train_val_test_split] Purge gap {max_h} bước lớn hơn kích thước "
+                    f"tập validation ({n_val - n_train} bước). Trả về validation rỗng. "
+                    "Xem xét tăng dữ liệu hoặc giảm horizon dự báo.",
+                    stacklevel=2,
+                )
+                val_end = n_train  # val slice [n_train:n_train] = rỗng
 
             X_train = X.iloc[:train_end]
             X_val   = X.iloc[n_train:val_end]
@@ -288,7 +354,7 @@ class TemperatureFeatureEngineer:
                 y_test  = y.iloc[n_val:]
 
             logger.info(
-                "Time-series split (PURGED %d-step boundary): train=%d (bỏ %d) / val=%d (bỏ %d) / test=%d",
+                "Time-series split (PURGED %d-step boundary): train=%d (bo %d) / val=%d (bo %d) / test=%d",
                 max_h, len(X_train), n_train - train_end, len(X_val), n_val - val_end, len(X_test)
             )
         else:

@@ -328,6 +328,131 @@ check(forecast_disc.confidence == "normal", "Du lieu gian doan 10 phut: Noi suy 
 # ══════════════════════════════════════════════════════════════════════════════
 # KET QUA TONG HOP
 # ══════════════════════════════════════════════════════════════════════════════
+
+# ============================================================
+# TEST GROUP 10: Regression Tests -- Review Fix #2 & #4
+# ============================================================
+print("\n" + "=" * 60)
+print("  TEST GROUP 10: Regression -- Interp Limit & Backend Contract")
+print("=" * 60)
+
+# -- 10.1: Noi suy khong gioi han -> degraded/fallback ----------
+# Chi 2 diem cach nhau 2 tieng: KHONG duoc tra confidence="normal"
+try:
+    import pandas as pd
+    from ml.inference_engine import TemperatureInferenceEngine
+    eng_cov = TemperatureInferenceEngine()
+    sparse_start = pd.Timestamp("2026-06-01 06:00:00", tz="UTC")
+    sparse_records = [
+        {"timestamp": sparse_start,
+         "temperature": 28.0, "humidity": 70.0, "pressure": 1010.0, "rain_raw": 0.0},
+        {"timestamp": sparse_start + pd.Timedelta(minutes=120),
+         "temperature": 29.0, "humidity": 72.0, "pressure": 1009.0, "rain_raw": 0.0},
+    ]
+    result_sparse = eng_cov.predict(sparse_records)
+    check(result_sparse.confidence != "normal",
+          "[Fix#2] 2 diem cach 2 gio: confidence phai la degraded/fallback (got='%s')" % result_sparse.confidence)
+    check(result_sparse.confidence in ("degraded", "fallback"),
+          "[Fix#2] confidence phai la degraded hoac fallback (got='%s')" % result_sparse.confidence)
+except Exception as e:
+    print("  [EXCEPTION] 10.1 interp limit: %s" % e)
+    FAILED += 1
+
+# -- 10.2: Mat du lieu keo dai (60+ phut) giua chuoi ------------
+try:
+    import numpy as np
+    import pandas as pd
+    from ml.inference_engine import TemperatureInferenceEngine
+    eng_gap2 = TemperatureInferenceEngine()
+    base = pd.Timestamp("2026-06-01 00:00:00", tz="UTC")
+    records_before = [
+        {"timestamp": base + pd.Timedelta(minutes=i),
+         "temperature": 27.0 + 0.01*i, "humidity": 70.0, "pressure": 1012.0, "rain_raw": 0.0}
+        for i in range(30)
+    ]
+    records_after = [
+        {"timestamp": base + pd.Timedelta(minutes=90+i),
+         "temperature": 27.5 + 0.01*i, "humidity": 71.0, "pressure": 1012.0, "rain_raw": 0.0}
+        for i in range(70)
+    ]
+    result_gap60 = eng_gap2.predict(records_before + records_after)
+    # coverage thuc = (30+70)/160 = 62.5% < COVERAGE_DEGRADED_THRESHOLD (70%)
+    check(result_gap60.confidence in ("degraded", "fallback"),
+          "[Fix#2] Mat du lieu 60 phut: confidence phai degraded/fallback (got='%s')" % result_gap60.confidence)
+except Exception as e:
+    print("  [EXCEPTION] 10.2 long gap: %s" % e)
+    FAILED += 1
+
+# -- 10.3: Contract test -- predict_forecast_for_backend() khop TV1 --
+try:
+    import numpy as np
+    import pandas as pd
+    from ml.inference_engine import predict_forecast_for_backend
+    base_b = pd.Timestamp("2026-06-01 08:00:00", tz="UTC")
+    records_b = [
+        {
+            "timestamp":   base_b + pd.Timedelta(minutes=i),
+            "temperature": 27.0 + 0.01*i + np.random.randn()*0.05,
+            "humidity":    68.0,
+            "pressure":    1012.0,
+            "rain_raw":    0.0,
+        }
+        for i in range(100)
+    ]
+    result_b = predict_forecast_for_backend(
+        records_b,
+        device_id="station01",
+        rain_probability={10: 0.15, 30: 0.30, 60: 0.50},
+        rain_source="model",
+    )
+    required_keys = [
+        "device_id", "generated_at", "current_temperature",
+        "current_humidity", "current_pressure",
+        "plus_10m", "plus_30m", "plus_60m",
+        "alert_triggered", "alert_message",
+    ]
+    for k in required_keys:
+        check(k in result_b, "[Fix#4] ForecastResponse co truong '%s'" % k)
+    horizon_keys = ["temperature_c", "rain_probability", "rain_level", "rain_source"]
+    for k in horizon_keys:
+        check(k in result_b["plus_10m"], "[Fix#4] plus_10m co truong '%s'" % k)
+    check(result_b["device_id"] == "station01", "[Fix#4] device_id dung")
+    check(isinstance(result_b["alert_triggered"], bool), "[Fix#4] alert_triggered la bool")
+    check(result_b["plus_10m"]["rain_source"] == "model", "[Fix#4] rain_source=model duoc giu nguyen")
+except Exception as e:
+    print("  [EXCEPTION] 10.3 backend contract: %s" % e)
+    FAILED += 1
+
+# -- 10.4: to_backend_response() tren TemperatureForecast truc tiep --
+try:
+    from ml.inference_engine import TemperatureForecast
+    tf = TemperatureForecast(
+        t_plus_10min=28.5,
+        t_plus_30min=29.0,
+        t_plus_60min=30.1,
+        model_used="XGBoost",
+        latency_ms=12.5,
+        confidence="normal",
+    )
+    resp = tf.to_backend_response(
+        device_id="station_test",
+        current_temperature=28.0,
+        current_humidity=65.0,
+        current_pressure=1011.0,
+        rain_probability={10: 0.20, 30: 0.45, 60: 0.72},
+        alert_threshold=0.70,
+    )
+    check(resp["device_id"] == "station_test",         "[Fix#4] to_backend_response device_id")
+    check(resp["current_temperature"] == 28.0,         "[Fix#4] to_backend_response current_temperature")
+    check(resp["plus_10m"]["temperature_c"] == 28.5,   "[Fix#4] plus_10m.temperature_c = t_plus_10min")
+    check(resp["plus_60m"]["rain_probability"] == 0.72,"[Fix#4] plus_60m rain_probability")
+    check(resp["alert_triggered"] is True,             "[Fix#4] alert khi rain_prob >= 0.70")
+    check(resp["plus_60m"]["rain_level"] == "High",    "[Fix#4] rain_level=High khi prob>=0.70")
+    check("alert_message" in resp,                     "[Fix#4] alert_message key ton tai")
+except Exception as e:
+    print("  [EXCEPTION] 10.4 to_backend_response: %s" % e)
+    FAILED += 1
+
 print("\n" + "=" * 60)
 print(f"  KET QUA: {PASSED} PASS -- {FAILED} FAIL")
 print("=" * 60)

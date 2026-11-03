@@ -52,6 +52,7 @@ from ml.inference_engine import (
     predict_forecast,
     predict_temperature_forecast,
     predict_combined_forecast,
+    predict_forecast_for_backend,
 )
 
 __version__ = "1.0.0"
@@ -88,4 +89,5 @@ __all__ = [
     "predict_forecast",
     "predict_temperature_forecast",
     "predict_combined_forecast",
+    "predict_forecast_for_backend",
 ]
