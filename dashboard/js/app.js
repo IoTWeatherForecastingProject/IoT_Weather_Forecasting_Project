@@ -24,7 +24,7 @@ const CONFIG = {
     API_BASE: `${API_ORIGIN}/api/weather`,
     WS_URL: `${API_ORIGIN.replace(/^http/, "ws")}/ws/weather/live`,
     DEVICE_ID: params.get("device") || "station01",
-    REF_SOURCE: "open-meteo",
+    REF_SOURCE: "open-meteo-15min",              // khớp crawler --once/--loop
     HISTORY_WINDOW_MS: 2 * 60 * 60 * 1000,      // biểu đồ giữ 2 giờ gần nhất
     HISTORY_PAGE_SIZE: 1000,                     // giới hạn của GET /history
     FORECAST_INTERVAL_MS: 15000,
@@ -50,7 +50,7 @@ const state = {
     chartVar: "temperature",
     chartDirty: false,
     points: [],          // [{t, temperature, humidity, pressure}] tăng dần theo t
-    reference: [],       // dữ liệu tham chiếu theo giờ
+    reference: [],       // dữ liệu tham chiếu của đúng một source/cadence
     benchmarkReady: null, // null: chưa biết, false: endpoint chưa có
     threshold: null,
     historyFailed: false,
@@ -510,11 +510,13 @@ function renderAlert(data, probs) {
     for (const [h, p] of Object.entries(probs)) {
         if (p !== null && (best === null || p > probs[best])) best = h;
     }
-    const thr = state.threshold !== null ? ` (ngưỡng ${Math.round(state.threshold * 100)}%)` : "";
+    const threshold = data.rain_alert_threshold ?? state.threshold;
+    const thr = threshold !== null && Number.isFinite(threshold)
+        ? ` (ngưỡng ${Math.round(threshold * 100)}%)` : "";
     const detail = best !== null ? `Xác suất mưa ${Math.round(probs[best] * 100)}% tại +${best} phút${thr}. ` : "";
     banner.classList.remove("hidden");
-    setText("alert-title", "CẢNH BÁO MƯA CỤC BỘ (CLOSED-LOOP TRIGGERED)");
-    setText("alert-message", detail + (data.alert_message || "Hệ thống đã kích hoạt còi hú và gửi cảnh báo."));
+    setText("alert-title", "CẢNH BÁO MƯA: XÁC SUẤT ĐẠT NGƯỠNG");
+    setText("alert-message", detail + (data.alert_message || "Xác suất mưa đã đạt ngưỡng cảnh báo."));
 }
 
 // --- 8. Điều khiển 2 chiều: ngưỡng cảnh báo (SA-06) ------------------------------

@@ -101,7 +101,7 @@ Mặc định Dashboard gọi Backend tại **cùng host, cổng 8000** (`http:/
 | `POST /api/weather/alerts/threshold` `{"threshold": 0.4–0.95}` | khi bấm nút | Có | — |
 | `GET /api/weather/alerts/threshold` → `{"threshold": 0.70}` | lúc mở trang | **Có** | Thanh trượt giữ 70%, ghi "chưa biết ngưỡng hiện tại" |
 | `GET /api/weather/sensor-health?device_id=&window_minutes=360` → `{status, checked_at, anomalies[{type, sensor, message}]}` | 30 s | **Có** (dùng `SensorAnomalyDetector.analyze()` của SA-03) | Badge `UNKNOWN` |
-| `GET /api/weather/benchmark?device_id=&source=open-meteo&hours=24` → `{reference[{timestamp, temperature, humidity, pressure}], latest_bias{temp_bias_c, ...} \| null}` | 10 phút | **Có** (dữ liệu từ bảng `reference_weather` của SA-04) | Không có series tham chiếu, bias `N/A` |
+| `GET /api/weather/benchmark?device_id=&source=open-meteo-15min&hours=24` → `{reference[{timestamp, temperature, humidity, pressure}], latest_bias{temp_bias_c, ...} \| null}` | 10 phút | **Có** (dữ liệu từ bảng `reference_weather` của SA-04) | Không có series tham chiếu, bias `N/A` |
 
 Trường `rain_source` (`model` / `heuristic`) của mỗi horizon dự báo được hiển thị thành badge nếu `/forecast` trả về (Backend đã giữ trường này; heuristic được gắn nhãn rõ ràng).
 
@@ -115,4 +115,4 @@ Trường `rain_source` (`model` / `heuristic`) của mỗi horizon dự báo đ
 - [ ] Nút cập nhật ngưỡng cảnh báo mưa gửi thành công request `POST /api/weather/alerts/threshold` và nhận phản hồi `200 OK`.
 
 
-`sensor-health` trả `UNKNOWN` với lý do `stale_data` nếu mẫu cuối quá 120 giây; Dashboard hiển thị dữ liệu đã cũ. Đối chuẩn mặc định dùng source `open-meteo` theo giờ; crawler current dùng source riêng `open-meteo-15min`, không trộn hai cadence.
+`sensor-health` trả `UNKNOWN` với lý do `stale_data` nếu mẫu cuối quá 120 giây; Dashboard hiển thị dữ liệu đã cũ. Dashboard dùng source `open-meteo-15min`, khớp bản ghi hiện tại do crawler `--once`/`--loop` lưu. Chạy crawler định kỳ 900 giây và lưu vào cùng DB với backend để có chuỗi tham chiếu. API vẫn hỗ trợ `source=open-meteo` cho backfill theo giờ (và giữ đây là mặc định khi bỏ tham số), cùng `source=openweather`; mỗi truy vấn chỉ lấy một source, không trộn hai độ phân giải. Muốn dashboard dùng lịch sử theo giờ thay cho crawler hiện tại, đổi `CONFIG.REF_SOURCE` trong `js/app.js` thành `open-meteo`.

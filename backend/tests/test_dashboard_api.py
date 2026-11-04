@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from itertools import count
+from pathlib import Path
+import re
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -146,6 +148,54 @@ def test_benchmark_insufficient_pairs_returns_null_bias(context):
     result = context.client.get("/api/weather/benchmark", params={"device_id": "target"}).json()
     assert len(result["reference"]) == 1 and result["latest_bias"] is None
     assert result["reason"] == "no_overlap"
+
+
+@pytest.mark.integrated_model
+def test_live_crawler_records_are_visible_to_dashboard(context, monkeypatch):
+    """Exercise the crawler -> DB -> actual dashboard source -> API contract."""
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.syspath_prepend(str(root))
+    from ai_engine.openweather_benchmark import crawler
+
+    payload = {"current": {
+        "time": "2026-10-27T11:45", "temperature_2m": 30.5,
+        "relative_humidity_2m": 72, "surface_pressure": 1008.5, "precipitation": 0,
+    }}
+    response = SimpleNamespace(raise_for_status=lambda: None, json=lambda: payload)
+    monkeypatch.setattr(crawler.requests, "get", Mock(return_value=response))
+    record, = crawler.WeatherBenchmarkCrawler().fetch_open_meteo_current()
+    context.db.add(ReferenceWeather(
+        id=1000, source=record.source, timestamp=record.timestamp,
+        lat=record.lat, lon=record.lon, temperature=record.temperature,
+        humidity=record.humidity, pressure=record.pressure,
+        precipitation=record.precipitation,
+    ))
+    context.db.flush()
+    dashboard = (root / "dashboard/js/app.js").read_text(encoding="utf-8")
+    source = re.search(r'REF_SOURCE:\s*"([^"]+)"', dashboard).group(1)
+
+    result = context.client.get("/api/weather/benchmark", params={"source": source})
+
+    assert result.status_code == 200
+    assert result.json()["source"] == record.source
+    assert len(result.json()["reference"]) == 1
+    assert result.json()["reference"][0]["temperature"] == 30.5
+
+
+@pytest.mark.parametrize("source,temperature", [
+    ("open-meteo", 30), ("open-meteo-15min", 31), ("openweather", 32),
+])
+def test_benchmark_preserves_separate_hourly_live_and_openweather_sources(context, source, temperature):
+    # Identical timestamps must not mix hourly backfill with live observations.
+    for name, value in (("open-meteo", 30), ("open-meteo-15min", 31), ("openweather", 32)):
+        context.ref(source=name, temperature=value)
+    result = context.client.get("/api/weather/benchmark", params={"source": source})
+    assert result.status_code == 200
+    assert [point["temperature"] for point in result.json()["reference"]] == [temperature]
+    # Keep the existing API default for clients consuming hourly backfill.
+    default = context.client.get("/api/weather/benchmark").json()
+    assert default["source"] == "open-meteo"
+    assert [point["temperature"] for point in default["reference"]] == [30]
 
 
 @pytest.mark.parametrize("path,params", [

@@ -139,7 +139,9 @@ def get_sensor_health(
 @router.get("/benchmark", summary="Đối chuẩn trạm với dữ liệu thời tiết tham chiếu")
 def get_benchmark(
     device_id: str = Query("station01", min_length=1, max_length=50),
-    source: Literal["open-meteo", "openweather"] = "open-meteo",
+    source: Literal["open-meteo", "open-meteo-15min", "openweather"] = Query(
+        "open-meteo", description="open-meteo: lịch sử theo giờ; open-meteo-15min: crawler hiện tại; openweather: hiện tại",
+    ),
     hours: int = Query(24, ge=1, le=168), db: Session = Depends(get_db),
 ):
     return analytics.benchmark(db, device_id, source, hours)
