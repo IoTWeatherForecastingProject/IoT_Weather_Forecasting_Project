@@ -278,6 +278,47 @@ except Exception as e:
     FAILED += 1
 
 
+# -- 10.3: Purge nghiem ngat -- khong ep giu mau train khi du lieu ngan --
+# Voi 50 hang dac trung, n_train=35 <= max_h=60 -> train_end phai la 0 (tap rong).
+# Tuyet doi khong dung max(1, n_train - max_h) de ep giu mau gay ro ri sang test.
+try:
+    import warnings
+    import numpy as np
+    import pandas as pd
+    from ml.feature_engineering import TemperatureFeatureEngineer, FeatureConfig
+
+    eng_short = TemperatureFeatureEngineer(FeatureConfig(
+        forecast_horizons=[10, 30, 60],
+    ))
+    rng_50 = pd.date_range("2026-01-01 00:00:00", periods=50, freq="1min", tz="UTC")
+    X_50 = pd.DataFrame(
+        np.ones((50, 5)),
+        index=rng_50,
+        columns=[f"feat_{i}" for i in range(5)],
+    )
+    y_50 = pd.Series(np.arange(50, dtype=float), index=rng_50)
+
+    with warnings.catch_warnings(record=True) as w_list:
+        warnings.simplefilter("always")
+        X_tr_s, X_v_s, X_te_s, y_tr_s, y_v_s, y_te_s = eng_short.train_val_test_split(
+            X_50, y_50, purge_boundary=True
+        )
+
+    # 1. Kiem tra train rong (khong con bi ep giu 1 mau boi max(1, ...))
+    check(len(X_tr_s) == 0, "[Fix#3-Review2] 50 hang: Train rong sau strict purge (khong ep giu mau vi pham)")
+    # 2. Kiem tra val rong
+    check(len(X_v_s) == 0, "[Fix#3-Review2] 50 hang: Val rong sau strict purge")
+    # 3. Kiem tra test van ton tai
+    check(len(X_te_s) > 0, "[Fix#3-Review2] 50 hang: Test set ton tai phan con lai")
+    # 4. Kiem tra canh bao ro rang khi tap train bi rong do purge gap
+    has_warn = any("Purge gap" in str(w.message) for w in w_list)
+    check(has_warn, "[Fix#3-Review2] Phat canh bao khi purge lam train hoac val rong")
+
+except Exception as e:
+    print("  [EXCEPTION] 10.3 short data purge: %s" % e)
+    FAILED += 1
+
+
 # ============================================================
 # KẾT QUẢ
 # ============================================================

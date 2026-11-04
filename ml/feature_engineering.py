@@ -321,15 +321,22 @@ class TemperatureFeatureEngineer:
         max_h = max(self.config.forecast_horizons) if self.config.forecast_horizons else 60
 
         if purge_boundary:
-            # Fix #3: Loại bỏ NGHIÊM NGẶT max_h bước cuối của train và val.
-            # KHÔNG dùng max(n_train+1, ...) để force-keep mẫu val gây rò rỉ.
-            # Nếu purge khiến val rỗng → cảnh báo và trả về val rỗng thay vì giữ
-            # mẫu vi phạm khoảng cách an toàn.
+            # Fix #3: Loại bỏ NGHIÊM NGẶT max_h bước cuối của cả train và val.
+            # KHÔNG dùng max(1, ...) hay max(n_train+1, ...) để ép giữ mẫu gây rò rỉ nhãn sang tập kế tiếp.
+            # Nếu purge khiến train hoặc val rỗng → cảnh báo và trả về tập rỗng thay vì giữ mẫu vi phạm.
             import warnings as _warnings
 
-            train_end = max(1, n_train - max_h)
-            val_end   = n_val - max_h  # Nghiêm ngặt: không có sàn n_train+1
+            train_end = n_train - max_h  # Nghiêm ngặt: không có sàn max(1, ...)
+            if train_end <= 0:
+                _warnings.warn(
+                    f"[train_val_test_split] Purge gap {max_h} bước lớn hơn hoặc bằng kích thước "
+                    f"tập train ({n_train} bước). Trả về tập train rỗng để triệt tiêu rò rỉ nhãn sang validation/test. "
+                    "Cần thêm dữ liệu lịch sử để đảm bảo ranh giới an toàn.",
+                    stacklevel=2,
+                )
+                train_end = 0
 
+            val_end = n_val - max_h  # Nghiêm ngặt: không có sàn n_train+1
             if val_end <= n_train:
                 # Purge làm validation rỗng — cảnh báo, trả về tập rỗng
                 _warnings.warn(

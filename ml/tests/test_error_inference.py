@@ -453,6 +453,96 @@ except Exception as e:
     print("  [EXCEPTION] 10.4 to_backend_response: %s" % e)
     FAILED += 1
 
+# -- 10.5: Tram mat ket noi dai roi vua khoi phuc (Review 2 - P1) --
+# Lich su 240 phut: 170 phut dau (T=20°C), 60 phut mat ket noi (phut 170-229),
+# 10 phut vua khoi phuc (phut 230-239, T=35°C tai t_now 03:59).
+# KHONG duoc am tham lay dac trung cu 53 phut truoc (03:06) de bao normal.
+# Phai tra fallback voi nhiet do hien tai (35°C) va bao ro ly do.
+try:
+    import numpy as np
+    import pandas as pd
+    from ml.inference_engine import TemperatureInferenceEngine
+
+    eng_reconn = TemperatureInferenceEngine()
+    base_t = pd.Timestamp("2026-06-01 00:00:00", tz="UTC")
+    records_reconn = []
+    # 170 phut dau: T = 20.0°C
+    for i in range(170):
+        records_reconn.append({
+            "timestamp": base_t + pd.Timedelta(minutes=i),
+            "temperature": 20.0,
+            "humidity": 70.0,
+            "pressure": 1013.0,
+            "rain_raw": 0.0,
+        })
+    # Khoang 60 phut mat ket noi (phut 170 den 229 khong co du lieu)
+    # 10 phut vua co lai: T = 35.0°C (mau moi nhat luc 03:59)
+    for i in range(230, 240):
+        records_reconn.append({
+            "timestamp": base_t + pd.Timedelta(minutes=i),
+            "temperature": 35.0,
+            "humidity": 65.0,
+            "pressure": 1012.0,
+            "rain_raw": 0.0,
+        })
+
+    fc_reconn = eng_reconn.predict(records_reconn)
+    # 1. Khong duoc tra confidence='normal' khi lay dac trung cu
+    check(fc_reconn.confidence in ("fallback", "degraded"),
+          "[Fix#1-Review2] Tram vua noi lai: confidence phai la fallback/degraded (got='%s')" % fc_reconn.confidence)
+    # 2. Model used phai la Persistence fallback
+    check(fc_reconn.model_used == "Persistence",
+          "[Fix#1-Review2] Tram vua noi lai: model_used la Persistence (got='%s')" % fc_reconn.model_used)
+    # 3. Nhiet do du bao phai la nhiet do moi nhat (35°C), KHONG lay 20°C cu tu 53 phut truoc!
+    check(abs(fc_reconn.t_plus_10min - 35.0) < 0.2,
+          "[Fix#1-Review2] Nhiet do fallback lay dung moc moi nhat 35.0°C (got=%.2f°C)" % fc_reconn.t_plus_10min)
+    # 4. error_msg phai ghi ro ly do thieu lich su lien tuc tai moc hien tai
+    msg_str = (fc_reconn.error_msg or "")
+    has_reason = any(k in msg_str.lower() for k in ["gián đoạn", "gian doan", "không đủ", "khong du", "đặc trưng", "dac trung", "liên tục", "lien tuc"])
+    check(has_reason,
+          "[Fix#1-Review2] error_msg neu ro nguyen nhan gian doan gan moc hien tai (msg='%s')" % msg_str[:80])
+
+except Exception as e:
+    print("  [EXCEPTION] 10.5 reconnect station: %s" % e)
+    FAILED += 1
+
+# -- 10.6: Nhat quan co canh bao khi threshold < default (Review 2 - P2) --
+# Khi khong truyen rain_probability, default la 0.15 cho cac horizon.
+# Dat alert_threshold = 0.10: alert_triggered phai la TRUE (0.15 >= 0.10).
+# Cac truong rain_probability, alert_triggered va alert_message phai dong nhat 100%.
+try:
+    from ml.inference_engine import TemperatureForecast, predict_forecast_for_backend
+
+    tf_test = TemperatureForecast(
+        t_plus_10min=28.0,
+        t_plus_30min=28.5,
+        t_plus_60min=29.0,
+        model_used="XGBoost",
+        latency_ms=10.0,
+        confidence="normal",
+    )
+
+    # 1. Test alert_threshold = 0.10 (< 0.15)
+    resp_thresh_low = tf_test.to_backend_response(alert_threshold=0.10)
+    check(resp_thresh_low["plus_10m"]["rain_probability"] == 0.15,
+          "[Fix#2-Review2] plus_10m rain_probability dung 0.15 mac dinh")
+    check(resp_thresh_low["alert_triggered"] is True,
+          "[Fix#2-Review2] alert_triggered la TRUE khi threshold (0.10) <= rain_prob (0.15)")
+    check(resp_thresh_low["alert_message"] is not None and "15%" in resp_thresh_low["alert_message"],
+          "[Fix#2-Review2] alert_message ghi ro xac suat mua 15%")
+
+    # 2. Test alert_threshold = 0.20 (> 0.15)
+    resp_thresh_high = tf_test.to_backend_response(alert_threshold=0.20)
+    check(resp_thresh_high["alert_triggered"] is False,
+          "[Fix#2-Review2] alert_triggered la FALSE khi threshold (0.20) > rain_prob (0.15)")
+    check(resp_thresh_high["alert_message"] is None,
+          "[Fix#2-Review2] alert_message la None khi khong co canh bao")
+
+except Exception as e:
+    print("  [EXCEPTION] 10.6 rain alert consistency: %s" % e)
+    FAILED += 1
+
+
 print("\n" + "=" * 60)
 print(f"  KET QUA: {PASSED} PASS -- {FAILED} FAIL")
 print("=" * 60)

@@ -117,7 +117,26 @@ class TemperatureForecast:
         """
         import datetime as _dt
 
-        rain_prob = rain_probability or {}
+        # Fix #2: Chuẩn hóa xác suất mưa cho từng horizon (10, 30, 60) MỘT LẦN DUY NHẤT.
+        # Đảm bảo giá trị hiển thị ở plus_10m/30m/60m, cờ alert_triggered và alert_message
+        # luôn dùng CHUNG một nguồn xác suất, nhất quán 100% dù alert_threshold đặt ở mức nào.
+        DEFAULT_RAIN_PROB = 0.15
+
+        def _extract_prob(raw_dict: Optional[Dict[Any, Any]], h: int) -> float:
+            if not raw_dict:
+                return DEFAULT_RAIN_PROB
+            for k in (h, str(h), f"plus_{h}m", f"p_{h}min", f"h{h}"):
+                if k in raw_dict and raw_dict[k] is not None:
+                    try:
+                        return float(raw_dict[k])
+                    except (ValueError, TypeError):
+                        pass
+            return DEFAULT_RAIN_PROB
+
+        final_rain_probs: Dict[int, float] = {
+            h: round(_extract_prob(rain_probability, h), 2)
+            for h in (10, 30, 60)
+        }
 
         def _rain_level(p: float) -> str:
             if p >= 0.70:
@@ -127,7 +146,7 @@ class TemperatureForecast:
             return "Low"
 
         def _horizon_dict(temp_c: float, h: int) -> Dict[str, Any]:
-            p = round(float(rain_prob.get(h, 0.15)), 2)
+            p = final_rain_probs[h]
             return {
                 "temperature_c":   round(temp_c, 2),
                 "rain_probability": p,
@@ -135,11 +154,7 @@ class TemperatureForecast:
                 "rain_source":     rain_source or ("model" if rain_probability else "heuristic"),
             }
 
-        max_rain = max(
-            float(rain_prob.get(10, 0.0)),
-            float(rain_prob.get(30, 0.0)),
-            float(rain_prob.get(60, 0.0)),
-        )
+        max_rain = max(final_rain_probs.values())
         alert = max_rain >= alert_threshold
 
         return {
@@ -250,13 +265,26 @@ class TemperatureInferenceEngine:
         try:
             # 1. Validate, parse DatetimeIndex và resample về lưới 1 phút
             df_1min = self._prepare_1min_grid(recent_data)
+            current_timestamp = df_1min.index[-1]
 
             # 2. Trích xuất đặc trưng dùng chung với pipeline training (ML-02)
             df_feat = self._feature_engineer.transform_features(df_1min)
             if len(df_feat) == 0:
                 raise ValueError("Không đủ dữ liệu sau khi trích xuất lag/rolling features.")
 
-            # 3. Lấy hàng mới nhất (t hiện tại) làm vector đặc trưng
+            # 3. Fix #1 (P1): Xác nhận hàng đặc trưng dùng dự báo thuộc mốc hiện tại.
+            # Sau khi giới hạn nội suy, trạm vừa khôi phục sau mất kết nối dài (ví dụ có 10 phút mới)
+            # sẽ thiếu lag/rolling 30-60m và bị transform_features() loại bỏ.
+            # Tuyệt đối không âm thầm lấy hàng cũ (cũ hàng chục phút) để dự báo cho hiện tại.
+            latest_feat_timestamp = df_feat.index[-1]
+            staleness = current_timestamp - latest_feat_timestamp
+            if staleness > pd.Timedelta(minutes=1):
+                raise ValueError(
+                    f"Dữ liệu bị gián đoạn gần thời điểm hiện tại {current_timestamp}: "
+                    f"đặc trưng gần nhất lúc {latest_feat_timestamp} (cũ {staleness.total_seconds() / 60:.1f} phút). "
+                    "Không đủ lịch sử liên tục để tính đặc trưng mốc hiện tại sau khi trạm vừa kết nối lại."
+                )
+
             X = df_feat.iloc[[-1]]
 
             # 4. Đối chiếu schema và căn chỉnh thứ tự cột khớp 100% với model training
@@ -298,7 +326,12 @@ class TemperatureInferenceEngine:
         except Exception as exc:
             # Lỗi không dự đoán được hoặc dữ liệu không đủ → Fallback an toàn kèm ghi chú
             logger.error("Inference fallback triggered: %s", exc, exc_info=True)
-            return self._persistence_fallback(recent_data, str(exc), t_start)
+            fallback_temp = None
+            if "df_1min" in locals() and len(df_1min) > 0 and "temperature" in df_1min.columns:
+                valid_temps = df_1min["temperature"].dropna()
+                if len(valid_temps) > 0:
+                    fallback_temp = float(valid_temps.iloc[-1])
+            return self._persistence_fallback(recent_data, str(exc), t_start, current_temp=fallback_temp)
 
     def predict_combined(
         self,
@@ -476,20 +509,33 @@ class TemperatureInferenceEngine:
         recent_data: Any,
         error_msg:   str,
         t_start:     float,
+        current_temp: Optional[float] = None,
     ) -> TemperatureForecast:
-        """Fallback về Persistence Baseline khi có lỗi hoặc dữ liệu chưa đủ dài."""
+        """
+        Fallback về Persistence Baseline khi có lỗi hoặc dữ liệu chưa đủ dài.
+        Đảm bảo nhiệt độ persistence lấy theo mẫu thời gian mới nhất hiện tại (current_temp).
+        """
         latency_ms = (time.perf_counter() - t_start) * 1000
-        t_current = float("nan")
+        t_current = current_temp if current_temp is not None else float("nan")
 
-        try:
-            if isinstance(recent_data, pd.DataFrame) and "temperature" in recent_data.columns:
-                t_current = float(recent_data["temperature"].dropna().iloc[-1])
-            elif isinstance(recent_data, list) and len(recent_data) > 0:
-                last = recent_data[-1]
-                if isinstance(last, dict) and "temperature" in last:
-                    t_current = float(last["temperature"])
-        except Exception:
-            pass
+        if np.isnan(t_current):
+            try:
+                if isinstance(recent_data, pd.DataFrame) and "temperature" in recent_data.columns:
+                    valid_temps = recent_data["temperature"].dropna()
+                    if len(valid_temps) > 0:
+                        t_current = float(valid_temps.iloc[-1])
+                elif isinstance(recent_data, list) and len(recent_data) > 0:
+                    for r in reversed(recent_data):
+                        if isinstance(r, dict) and "temperature" in r and r["temperature"] is not None:
+                            try:
+                                val = float(r["temperature"])
+                                if not np.isnan(val):
+                                    t_current = val
+                                    break
+                            except (ValueError, TypeError):
+                                pass
+            except Exception:
+                pass
 
         if np.isnan(t_current):
             t_current = 25.0
