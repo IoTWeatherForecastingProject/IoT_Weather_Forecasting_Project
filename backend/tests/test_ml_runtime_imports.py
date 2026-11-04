@@ -44,6 +44,7 @@ else:
 
 
 def test_delivered_models_predict_without_training_dependencies():
+    pytest.importorskip("xgboost", reason="Install requirements-inference.txt")
     script = """
 import importlib.abc
 import sys
