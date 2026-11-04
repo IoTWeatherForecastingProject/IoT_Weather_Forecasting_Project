@@ -30,6 +30,13 @@ def check_dashboard(runtime, report_dir, publish):
                 expect(page.locator("#connection-status")).to_have_text("WS CONNECTED", timeout=20000)
                 expect(page.locator("#fc-src-10")).to_have_text("HEURISTIC", timeout=15000)
                 expect(page.locator("#threshold-applied")).to_contain_text("70%", timeout=15000)
+                expect(page.locator("#alert-banner")).to_be_visible(timeout=15000)
+                expect(page.locator("#alert-title")).to_contain_text("XÁC SUẤT ĐẠT NGƯỠNG")
+                # A previous threshold read can be stale. The alert must show
+                # the threshold used by this forecast, rather than browser state.
+                page.evaluate("async () => { state.threshold = 0.01; await fetchForecast(); }")
+                expect(page.locator("#alert-message")).to_contain_text("ngưỡng 70%")
+                page.evaluate("loadThreshold()")
                 publish(temperature=30.1)
                 expect(page.locator("#card-temp")).to_have_text("30.1", timeout=10000)
                 page.locator("#threshold-slider").evaluate(
@@ -55,6 +62,8 @@ def check_dashboard(runtime, report_dir, publish):
                 assert not errors, f"Dashboard JS errors: {errors}"
                 return {"status": "passed", "api_errors": failures, "javascript_errors": errors,
                         "websocket_reconnect": True, "threshold_write": True,
+                        "forecast_threshold_display": True,
+                        "alert_describes_probability_decision": True,
                         "screenshots": ["dashboard_desktop.png", "dashboard_mobile.png"]}
             finally:
                 browser.close()

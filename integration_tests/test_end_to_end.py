@@ -8,6 +8,7 @@ import argparse
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -84,19 +85,33 @@ def core_checks(rt, report):
         step('health_and_observers_ready')
         integration = api.get('/api/weather/integrations')
         integration.raise_for_status()
-        assert integration.json()['forecast']['status'] == 'local_heuristic'
-        assert integration.json()['analytics']['status'] == 'not_integrated'
-        assert rt.external_modules_blocked
-        step('tv1_runs_without_tv2_tv3_imports', integrations=integration.json())
+        if rt.integrated_models:
+            assert integration.json()['forecast']['mode'] == 'auto'
+            assert integration.json()['analytics']['mode'] == 'auto'
+            assert not rt.external_modules_blocked
+            # Force a decision independently of model probabilities. This only
+            # affects the disposable DB and isolated MQTT namespace.
+            api.post('/api/weather/alerts/threshold', json={'threshold': 0.0}).raise_for_status()
+            step('tv2_tv3_integration_enabled', integrations=integration.json())
+        else:
+            assert integration.json()['forecast']['status'] == 'local_heuristic'
+            assert integration.json()['analytics']['status'] == 'not_integrated'
+            assert rt.external_modules_blocked
+            step('tv1_runs_without_tv2_tv3_imports', integrations=integration.json())
         now = datetime.now(timezone.utc)
+        # Seed slightly beyond the query window so the 120-minute boundary
+        # remains covered after HTTP/MQTT startup. IoT cadence is 30 seconds.
         history = [dict(device_id=rt.device, timestamp=now-timedelta(seconds=index*30),
-                        temperature=31.5, humidity=90, pressure=1002 + index / 160 * 6,
+                        temperature=31.2 + index / 242 * 0.6,
+                        humidity=90 + 0.2 * math.sin(index / 20),
+                        pressure=1002 + index / 242 * 6,
                         rain_raw=200, rain_detected=1)
-                   for index in range(160, 0, -1)]
+                   for index in range(242, 0, -1)]
+        reference_source = 'open-meteo-15min' if rt.integrated_models else 'open-meteo'
         with rt.engine.begin() as db:
             db.execute(insert(WeatherMeasurement), history)
             db.execute(insert(ReferenceWeather), [
-                dict(source='open-meteo', timestamp=now-timedelta(minutes=minutes), lat=0, lon=0,
+                dict(source=reference_source, timestamp=now-timedelta(minutes=minutes), lat=0, lon=0,
                      temperature=30, humidity=80, pressure=1005) for minutes in (20, 10)
             ])
         payload = publish()
@@ -114,7 +129,7 @@ def core_checks(rt, report):
         current.raise_for_status()
         assert current.json()['temperature'] == payload['temperature']
         rows = api.get('/api/weather/history', params={'device_id':rt.device,'limit':1000}).json()
-        assert len(rows) == 161
+        assert len(rows) == 243
         step('telemetry_persisted_api_and_websocket', rows=len(rows))
 
         # Re-publish the same UTC measurement and a malformed one; neither may broadcast.
@@ -129,7 +144,7 @@ def core_checks(rt, report):
         step('duplicate_and_invalid_payloads_rejected')
 
         # No /forecast has been requested: receipt proves the background monitor acted.
-        assert alert.wait(10), 'No independently scheduled alert'
+        assert alert.wait(30 if rt.integrated_models else 10), 'No independently scheduled alert'
         with lock:
             first = commands[0]
         assert first['topic'] == alert_topic and first['retained'] is False
@@ -148,11 +163,29 @@ def core_checks(rt, report):
             response = api.get('/api/weather/forecast', params={'device_id':rt.device})
             response.raise_for_status()
             forecast = response.json()
-        assert forecast['history_window_minutes'] == 76 and forecast['history_measurements'] > 150
-        assert 75 <= forecast['history_span_minutes'] <= 76
+        assert forecast['history_window_minutes'] == 120 and forecast['history_measurements'] > 230
+        assert 119 <= forecast['history_span_minutes'] <= 120
         assert forecast['alert_triggered'] is True
-        assert all(forecast[f'plus_{h}m']['rain_source'] == 'heuristic' for h in (10,30,60))
-        assert forecast['forecast_engine'] == 'local_heuristic' and forecast['fallback_reason'] == 'standalone_mode'
+        if rt.integrated_models:
+            assert forecast['forecast_engine'] == 'external', forecast
+            assert forecast['temperature_confidence'] == 'normal', forecast
+            assert forecast['temperature_fallback_reason'] is None, forecast
+            assert forecast['temperature_model'] != 'Persistence', forecast
+            assert all(forecast[f'plus_{h}m']['temperature_source'] == 'model' for h in (10, 30, 60)), forecast
+            rain_artifact = ROOT / 'ai_engine/saved_models/rain_classifier_models.joblib'
+            for horizon in (10, 30, 60):
+                prediction = forecast[f'plus_{horizon}m']
+                assert 0 <= prediction['rain_probability'] <= 1
+                if rain_artifact.exists():
+                    assert prediction['rain_source'] in ('model', 'heuristic')
+                else:
+                    assert prediction['rain_source'] == 'heuristic'
+            step('real_tv2_models_and_tv3_rain_path', temperature_model=forecast['temperature_model'],
+                 rain_artifact_present=rain_artifact.exists(),
+                 rain_sources={str(h): forecast[f'plus_{h}m']['rain_source'] for h in (10, 30, 60)})
+        else:
+            assert all(forecast[f'plus_{h}m']['rain_source'] == 'heuristic' for h in (10,30,60))
+            assert forecast['forecast_engine'] == 'local_heuristic' and forecast['fallback_reason'] == 'standalone_mode'
         time.sleep(1.1)  # Two 0.5s monitor cycles, well inside the 180s cooldown.
         with lock:
             unique = {c['payload']['timestamp'] for c in commands}
@@ -162,7 +195,10 @@ def core_checks(rt, report):
         changed = api.post('/api/weather/alerts/threshold', json={'threshold':1.0})
         changed.raise_for_status()
         assert api.get('/api/weather/alerts/threshold').json()['threshold'] == 1.0
-        assert api.get('/api/weather/forecast', params={'device_id':rt.device}).json()['alert_triggered'] is False
+        high_threshold_forecast = api.get('/api/weather/forecast', params={'device_id':rt.device}).json()
+        expected_alert = max(high_threshold_forecast[f'plus_{h}m']['rain_probability'] for h in (10, 30, 60)) >= 1.0
+        assert high_threshold_forecast['alert_triggered'] is expected_alert
+        assert high_threshold_forecast['rain_alert_threshold'] == 1.0
         invalid = api.post('/api/weather/alerts/threshold', json={'threshold':1.1})
         assert invalid.status_code == 422
         api.post('/api/weather/alerts/threshold', json={'threshold':original_threshold}).raise_for_status()
@@ -170,17 +206,29 @@ def core_checks(rt, report):
 
         health = api.get('/api/weather/sensor-health', params={'device_id':rt.device})
         health.raise_for_status()
-        assert health.json()['status'] == 'UNKNOWN' and health.json()['reason'] == 'analytics_not_integrated'
-        benchmark = api.get('/api/weather/benchmark', params={'device_id':rt.device})
+        if rt.integrated_models:
+            assert health.json()['analysis_source'] == 'external', health.json()
+            assert health.json()['status'] in ('OK', 'WARNING', 'FAULT')
+        else:
+            assert health.json()['status'] == 'UNKNOWN' and health.json()['reason'] == 'analytics_not_integrated'
+        benchmark = api.get('/api/weather/benchmark', params={'device_id':rt.device, 'source':reference_source})
         benchmark.raise_for_status()
         assert len(benchmark.json()['reference']) == 2, f"Reference count: {benchmark.json()}"
-        assert benchmark.json()['latest_bias'] is None and benchmark.json()['reason'] == 'analytics_not_integrated'
-        assert benchmark.json()['metrics'] == {}
+        if rt.integrated_models:
+            assert benchmark.json()['analysis_source'] == 'external', benchmark.json()
+            assert benchmark.json()['latest_bias'] is not None, benchmark.json()
+            assert benchmark.json()['latest_bias']['n_iot'] >= 3
+            assert benchmark.json()['metrics']['temperature']['n'] == 2
+            step('live_reference_and_real_tv3_analytics', source=reference_source,
+                 latest_bias=benchmark.json()['latest_bias'])
+        else:
+            assert benchmark.json()['latest_bias'] is None and benchmark.json()['reason'] == 'analytics_not_integrated'
+            assert benchmark.json()['metrics'] == {}
         missing = rt.device + '_missing'
         assert api.get('/api/weather/forecast', params={'device_id':missing}).status_code == 404
         assert api.get('/api/weather/sensor-health', params={'device_id':missing}).json()['status'] == 'UNKNOWN'
         assert api.get('/api/weather/benchmark', params={'device_id':missing}).json()['latest_bias'] is None
-        step('unmerged_analytics_and_empty_states')
+        step('analytics_and_empty_states')
         # This validates backend -> contract double only, not electrical timing.
         wait_until(lambda: not station.snapshot()['buzzer_on'], timeout=4)
         wait_until(lambda: not station.snapshot()['active'], timeout=11)
@@ -205,20 +253,23 @@ def core_checks(rt, report):
             client.loop_stop()
 
 
-def run_e2e_tests(report_dir, dashboard=False, backend_tests=False):
+def run_e2e_tests(report_dir, dashboard=False, backend_tests=False, integrated_models=False):
     report_dir.mkdir(parents=True, exist_ok=True)
     report = {'started_at':datetime.now(timezone.utc).isoformat(), 'status':'failed',
-              'data_source':'isolated_test_fixtures', 'external_modules_blocked':True,
-              'tv2_tv3_merged':False, 'checks':[]}
+              'data_source':'isolated_test_fixtures', 'external_modules_blocked':not integrated_models,
+              'mode':'integrated_models' if integrated_models else 'independent_tv1', 'checks':[]}
     code = 1
     try:
-        with isolated_backend(report_dir) as rt:
+        with isolated_backend(report_dir, integrated_models=integrated_models) as rt:
             report['run_id'] = rt.run_id
             report['mqtt_namespace'] = rt.prefix
             report['isolated_database'] = rt.database
             if backend_tests:
+                pytest_args = [sys.executable, '-m', 'pytest', 'tests', '-q', '--junitxml', str(report_dir/'backend_pytest.xml')]
+                if not integrated_models:
+                    pytest_args.extend(['-m', 'not integrated_model'])
                 result = subprocess.run(
-                    [sys.executable, '-m', 'pytest', 'tests', '-q', '--junitxml', str(report_dir/'backend_pytest.xml')],
+                    pytest_args,
                     cwd=ROOT/'backend', env=rt.env, capture_output=True, text=True,
                     timeout=120, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
                 )
@@ -226,7 +277,7 @@ def run_e2e_tests(report_dir, dashboard=False, backend_tests=False):
                 report['backend_pytest_exit_code'] = result.returncode
                 if result.returncode:
                     raise AssertionError('Backend suite failed; inspect backend_pytest.log')
-                print('PASS backend_suite_in_disposable_database_without_external_modules', flush=True)
+                print('PASS backend_suite_in_disposable_database', flush=True)
             core_checks(rt, report)
             if dashboard:
                 from dashboard_check import check_dashboard
@@ -262,7 +313,8 @@ def run_e2e_tests(report_dir, dashboard=False, backend_tests=False):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dashboard', action='store_true')
-    parser.add_argument('--backend-tests', action='store_true', help='Run the full backend suite in the same disposable DB, with TV2/TV3 imports blocked')
+    parser.add_argument('--backend-tests', action='store_true', help='Run the backend suite in the same disposable DB and selected integration mode')
+    parser.add_argument('--integrated-models', action='store_true', help='Use delivered TV2 models and real TV3 analytics; requires inference dependencies')
     parser.add_argument('--report-dir', type=Path, default=ROOT/'personal/tv1/verification'/datetime.now().strftime('%Y%m%d_%H%M%S'))
     args = parser.parse_args()
-    raise SystemExit(run_e2e_tests(args.report_dir.resolve(), args.dashboard, args.backend_tests))
+    raise SystemExit(run_e2e_tests(args.report_dir.resolve(), args.dashboard, args.backend_tests, args.integrated_models))

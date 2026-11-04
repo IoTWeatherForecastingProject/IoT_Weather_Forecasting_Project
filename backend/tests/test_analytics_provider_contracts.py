@@ -7,9 +7,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from app.services import analytics_client
 
-def test_sensor_health_json_types(monkeypatch: pytest.MonkeyPatch) -> None:
+pytestmark = pytest.mark.integrated_model
+
+
+@pytest.fixture
+def analytics_client():
+    from app.services import analytics_client
+    return analytics_client
+
+
+def test_sensor_health_json_types(monkeypatch: pytest.MonkeyPatch, analytics_client) -> None:
     """Giữ field phụ, đổi numpy/pandas, NaN và vô cực sang JSON thuần."""
     result = {
         "status": "WARNING",
@@ -36,7 +44,7 @@ def test_sensor_health_json_types(monkeypatch: pytest.MonkeyPatch) -> None:
     assert type(report["anomalies"][0]["samples"]) is int
     assert type(report["rain_drift"]) is bool
 
-def test_latest_bias_minimum_per_variable() -> None:
+def test_latest_bias_minimum_per_variable(analytics_client) -> None:
     """Biến chỉ có hai mẫu là None dù biến khác có đủ ba mẫu để ghép."""
     now = datetime.now(UTC)
     iot = [
