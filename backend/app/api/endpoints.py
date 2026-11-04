@@ -95,7 +95,7 @@ def get_weather_history(
     "/forecast",
     response_model=ForecastResponse,
     summary="Dự báo thời tiết ngắn hạn bằng AI Inference Engine",
-    description="Lấy dữ liệu của một trạm trong 76 phút gần nhất, theo thứ tự thời gian, để dự báo +10m, +30m, +60m. Khi không truyền device_id, chọn trạm có mẫu mới nhất trong cửa sổ này. Trả 404 nếu không có mẫu; rain_source cho biết xác suất mưa từ model hay heuristic."
+    description="Lấy dữ liệu của một trạm trong 120 phút gần nhất, theo thứ tự thời gian, để dự báo +10m, +30m, +60m. Khi không truyền device_id, chọn trạm có mẫu mới nhất trong cửa sổ này. Trả 404 nếu không có mẫu; temperature_source và rain_source cho biết nguồn dự báo tại mỗi horizon."
 )
 def get_weather_forecast(
     request: Request,

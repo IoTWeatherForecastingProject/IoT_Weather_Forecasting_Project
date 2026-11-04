@@ -46,6 +46,9 @@ class WeatherMeasurementResponse(BaseModel):
 class ForecastHorizon(BaseModel):
     """Schema kết quả dự báo tại một mốc thời gian cụ thể."""
     temperature_c: float = Field(..., allow_inf_nan=False, description="Nhiệt độ dự báo (°C)", examples=[30.5])
+    temperature_source: Optional[Literal["model", "persistence", "heuristic"]] = Field(
+        None, description="Nguồn nhiệt độ tại horizon này; null nếu provider cũ không cung cấp"
+    )
     rain_probability: float = Field(..., ge=0, le=1, allow_inf_nan=False, description="Xác suất mưa dự báo (0.0 đến 1.0)", examples=[0.72])
     rain_level: Literal["Low", "Medium", "High"] = Field(..., description="Mức độ mưa (Low, Medium, High)", examples=["High"])
     rain_source: Literal["model", "heuristic"] = Field(..., description="Nguồn xác suất mưa: model đã huấn luyện hoặc heuristic")
@@ -67,6 +70,9 @@ class ForecastPayload(BaseModel):
     current_temperature: float = Field(..., allow_inf_nan=False, description="Nhiệt độ hiện tại (°C)", examples=[31.2])
     current_humidity: float = Field(..., allow_inf_nan=False, description="Độ ẩm hiện tại (%)", examples=[78.0])
     current_pressure: float = Field(..., allow_inf_nan=False, description="Áp suất hiện tại (hPa)", examples=[1006.5])
+    temperature_model: Optional[str] = None
+    temperature_confidence: Optional[Literal["normal", "degraded", "fallback"]] = None
+    temperature_fallback_reason: Optional[str] = None
     plus_10m: ForecastHorizon = Field(..., description="Dự báo tại mốc +10 phút")
     plus_30m: ForecastHorizon = Field(..., description="Dự báo tại mốc +30 phút")
     plus_60m: ForecastHorizon = Field(..., description="Dự báo tại mốc +60 phút")

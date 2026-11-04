@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     # Alert & Closed-loop actuation
     RAIN_ALERT_THRESHOLD: float = 0.70
-    # TV1 runs independently until TV2/TV3 explicitly deliver their modules.
+    # Opt in to the integrated TV2/TV3 runtime; standalone remains available.
     FORECAST_ENGINE_MODE: Literal["auto", "heuristic"] = "heuristic"
     ANALYTICS_ENGINE_MODE: Literal["disabled", "auto"] = "disabled"
     ALERT_COOLDOWN_SECONDS: float = Field(default=180, ge=0)

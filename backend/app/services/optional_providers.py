@@ -7,9 +7,10 @@ from app.config import settings
 
 
 def load_symbol(module, symbol):
-    root = str(Path(__file__).resolve().parents[3] / "ai_engine")
-    if root not in sys.path:
-        sys.path.append(root)
+    project_root = Path(__file__).resolve().parents[3]
+    for root in (str(project_root), str(project_root / "ai_engine")):
+        if root not in sys.path:
+            sys.path.append(root)
     return getattr(importlib.import_module(module), symbol)
 
 

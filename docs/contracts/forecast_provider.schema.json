@@ -11,6 +11,24 @@
           "title": "Temperature C",
           "type": "number"
         },
+        "temperature_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "model",
+                "persistence",
+                "heuristic"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Nguồn nhiệt độ tại horizon này; null nếu provider cũ không cung cấp",
+          "title": "Temperature Source"
+        },
         "rain_probability": {
           "description": "Xác suất mưa dự báo (0.0 đến 1.0)",
           "examples": [
@@ -94,6 +112,47 @@
       "title": "Current Pressure",
       "type": "number"
     },
+    "temperature_model": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Temperature Model"
+    },
+    "temperature_confidence": {
+      "anyOf": [
+        {
+          "enum": [
+            "normal",
+            "degraded",
+            "fallback"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Temperature Confidence"
+    },
+    "temperature_fallback_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Temperature Fallback Reason"
+    },
     "plus_10m": {
       "$ref": "#/$defs/ForecastHorizon",
       "description": "Dự báo tại mốc +10 phút"
@@ -143,6 +202,5 @@
     "alert_triggered"
   ],
   "title": "ForecastPayload",
-  "type": "object",
-  "$schema": "https://json-schema.org/draft/2020-12/schema"
+  "type": "object"
 }

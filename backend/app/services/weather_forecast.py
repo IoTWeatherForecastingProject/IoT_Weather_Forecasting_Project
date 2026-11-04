@@ -13,13 +13,15 @@ from app.ingestion.validation import usable_measurement
 from app.services.rain_threshold import resolve_rain_threshold
 
 logger = logging.getLogger(__name__)
-FORECAST_HISTORY_MINUTES = 76
+# TV2 requires 90 actual minutes; allow room for sample timing and TV3 lookbacks.
+# Keep this constant independent of optional ML imports at API startup.
+FORECAST_HISTORY_MINUTES = 120
 
 
 class NoRecentMeasurements(ValueError):
     def __init__(self, device_id):
         self.device_id = device_id
-        super().__init__("Khong co du lieu do trong 76 phut gan nhat.")
+        super().__init__(f"Khong co du lieu do trong {FORECAST_HISTORY_MINUTES} phut gan nhat.")
 
 
 class UnusableMeasurements(ValueError):

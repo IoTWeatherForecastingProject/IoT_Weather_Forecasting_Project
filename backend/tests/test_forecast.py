@@ -77,10 +77,10 @@ def context(monkeypatch):
 
 
 def test_forecast_uses_full_time_window_and_preserves_per_horizon_sources(context):
-    # 153 samples cover 76 minutes; a count-based 30-row query must fail this test.
-    for index in reversed(range(153)):
+    # 241 samples cover 120 minutes; TV2 needs at least 90 actual minutes.
+    for index in reversed(range(241)):
         context.add(age_minutes=index / 2)
-    context.add(age_minutes=76.001)
+    context.add(age_minutes=120.001)
     context.add(age_minutes=-0.001)
     context.add(device_id="other", age_minutes=1)
 
@@ -88,15 +88,15 @@ def test_forecast_uses_full_time_window_and_preserves_per_horizon_sources(contex
     assert response.status_code == 200
     result = response.json()
     frame = context.predictor.call_args.args[0]
-    assert len(frame) == 153
+    assert len(frame) == 241
     assert set(frame["device_id"]) == {"target"}
     assert frame["timestamp"].is_monotonic_increasing
-    assert frame["timestamp"].iloc[0].replace(tzinfo=timezone.utc) == NOW - timedelta(minutes=76)
+    assert frame["timestamp"].iloc[0].replace(tzinfo=timezone.utc) == NOW - timedelta(minutes=120)
     assert frame["timestamp"].iloc[-1].replace(tzinfo=timezone.utc) == NOW
     assert frame["rain_raw"].eq(750).all()
-    assert result["history_measurements"] == 153
-    assert result["history_window_minutes"] == 76
-    assert result["history_span_minutes"] == 76
+    assert result["history_measurements"] == 241
+    assert result["history_window_minutes"] == 120
+    assert result["history_span_minutes"] == 120
     assert [result[h]["rain_source"] for h in HORIZONS] == ["model", "heuristic", "model"]
 
 
@@ -115,7 +115,7 @@ def test_omitted_device_selects_only_latest_recent_station(context):
     assert len(frame) == 2
 
 
-@pytest.mark.parametrize("age_minutes", [None, 77, -1])
+@pytest.mark.parametrize("age_minutes", [None, 121, -1])
 @pytest.mark.parametrize("explicit_device", [True, False])
 def test_absent_stale_or_future_measurements_do_not_create_forecasts(context, age_minutes, explicit_device):
     if age_minutes is not None:

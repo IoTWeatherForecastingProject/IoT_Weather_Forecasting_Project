@@ -3,13 +3,14 @@ from datetime import datetime, timezone
 import pandas as pd
 from app.config import settings
 from app.schemas.weather import ForecastPayload
-from app.services.optional_providers import load_symbol
 from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
 def load_forecast_predictor():
-    return load_symbol("inference.unified_forecast", "predict_forecast")
+    # Import the adapter only on opt-in; standalone startup needs no ML runtime.
+    from app.services.integrated_forecast import predict_forecast
+    return predict_forecast
 
 
 class ForecastClient:
@@ -78,6 +79,9 @@ class ForecastClient:
         return {
             "forecast_engine": "local_heuristic",
             "fallback_reason": fallback_reason,
+            "temperature_model": "LocalHeuristic",
+            "temperature_confidence": "fallback",
+            "temperature_fallback_reason": fallback_reason,
             "device_id": latest.get("device_id", "station01"),
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "current_temperature": round(cur_temp, 2),
@@ -85,18 +89,21 @@ class ForecastClient:
             "current_pressure": round(cur_press, 2),
             "plus_10m": {
                 "temperature_c": round(cur_temp - 0.1, 2),
+                "temperature_source": "heuristic",
                 "rain_probability": round(p10, 2),
                 "rain_level": get_level(p10),
                 "rain_source": "heuristic",
             },
             "plus_30m": {
                 "temperature_c": round(cur_temp - 0.3, 2),
+                "temperature_source": "heuristic",
                 "rain_probability": round(p30, 2),
                 "rain_level": get_level(p30),
                 "rain_source": "heuristic",
             },
             "plus_60m": {
                 "temperature_c": round(cur_temp - 0.7, 2),
+                "temperature_source": "heuristic",
                 "rain_probability": round(p60, 2),
                 "rain_level": get_level(p60),
                 "rain_source": "heuristic",
