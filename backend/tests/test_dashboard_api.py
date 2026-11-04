@@ -59,9 +59,29 @@ def context(monkeypatch):
 
 def test_threshold_read_fallback_update_and_read_back(context, monkeypatch):
     monkeypatch.setattr(settings, "RAIN_ALERT_THRESHOLD", 0.72)
-    assert context.client.get("/api/weather/alerts/threshold").json() == {"threshold": 0.72}
+    assert context.client.get("/api/weather/alerts/threshold").json() == {"threshold": 0.72, "source": "default", "updated_at": None}
     assert context.client.post("/api/weather/alerts/threshold", json={"threshold": 0.65}).status_code == 200
-    assert context.client.get("/api/weather/alerts/threshold").json() == {"threshold": 0.65}
+    saved = context.client.get("/api/weather/alerts/threshold").json()
+    assert saved["threshold"] == 0.65 and saved["source"] == "db" and saved["updated_at"]
+
+
+@pytest.mark.parametrize("value", ["invalid", "NaN", "Infinity", "1.5", "-0.1"])
+def test_invalid_threshold_uses_shared_default(context, monkeypatch, value):
+    from app.services.rain_threshold import resolve_rain_threshold
+    monkeypatch.setattr(settings, "RAIN_ALERT_THRESHOLD", 0.85)
+    context.db.add(SystemConfig(config_key="rain_alert_threshold", config_value=value))
+    context.db.commit()
+    response = context.client.get("/api/weather/alerts/threshold")
+    assert response.status_code == 200
+    assert response.json() == {"threshold": 0.85, "source": "default", "updated_at": None}
+    assert resolve_rain_threshold(context.db) == (0.85, "default", None)
+
+
+def test_no_duplicate_api_handlers():
+    from app.api.endpoints import router
+    from collections import Counter
+    counts = Counter((route.path, tuple(sorted(route.methods))) for route in router.routes)
+    assert all(count == 1 for count in counts.values())
 
 
 def test_health_empty_is_unknown(context):

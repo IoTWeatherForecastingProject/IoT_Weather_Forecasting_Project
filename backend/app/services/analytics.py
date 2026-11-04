@@ -32,6 +32,7 @@ def sensor_health(db: Session, device_id: str, window_minutes: int, now=None):
     ).order_by(WeatherMeasurement.timestamp, WeatherMeasurement.id).all()
     result = {"device_id": device_id, "window_minutes": window_minutes, "status": "UNKNOWN",
               "checked_at": None, "anomalies": [], "reason": "no_data",
+              "n_records": len(rows), "frozen_sensors": [], "rain_drift": False,
               "analysis_source": "not_integrated"}
     if not rows:
         return result
@@ -50,6 +51,8 @@ def sensor_health(db: Session, device_id: str, window_minutes: int, now=None):
             raise ValueError("Invalid sensor health report")
         json.dumps(report, allow_nan=False)
         result.update(status=report["status"], anomalies=report["anomalies"],
+                      frozen_sensors=report.get("frozen_sensors", []),
+                      rain_drift=report.get("rain_drift", False),
                       checked_at=report.get("checked_at", last.isoformat()), analysis_source="external",
                       reason="anomalies_detected" if report["anomalies"] else "no_anomalies_detected")
     except (ImportError, AttributeError):
@@ -92,13 +95,22 @@ def benchmark(db: Session, device_id: str, source: str, hours: int, now=None):
         ref = pd.DataFrame(points, columns=columns)
         report, aligned = build_report(iot, ref, device_id, source)
         latest = None
-        if not aligned.empty:
-            row = aligned.iloc[-1]
-            latest = {"timestamp": row["timestamp"].isoformat(), "n_iot": int(row["n_iot"])}
+        latest_reference = next((point for point in reversed(points)
+                                 if any(point[field] is not None for field in columns[1:])), None)
+        matched = aligned
+        if latest_reference is not None and not aligned.empty:
+            matched = aligned[pd.to_datetime(aligned["timestamp"], utc=True)
+                              == pd.Timestamp(latest_reference["timestamp"])]
+        if latest_reference is not None and not matched.empty:
+            row = matched.iloc[-1]
+            latest = {"timestamp": row["timestamp"].isoformat(),
+                      "reference_timestamp": row["timestamp"].isoformat(), "n_iot": int(row["n_iot"])}
             for field, key in (("temperature", "temp_bias_c"), ("humidity", "humidity_bias_pct"),
                                ("pressure", "pressure_bias_hpa")):
                 error = row[f"iot_{field}"] - row[f"ref_{field}"]
                 latest[key] = round(float(error), 4) if pd.notna(error) else None
+            latest["hum_bias_percent"] = latest["humidity_bias_pct"]
+            latest["press_bias_hpa"] = latest["pressure_bias_hpa"]
         values = dict(latest_bias=latest, metrics=report["metrics"],
                       reason=report.get("reason", "matched"), notes=report["meta"]["notes"], analysis_source="external")
         json.dumps(values, allow_nan=False)

@@ -10,6 +10,7 @@ from app.db.models import SystemConfig, WeatherMeasurement
 from app.services.alert_service import AlertService
 from app.services.forecast_client import ForecastClient
 from app.ingestion.validation import usable_measurement
+from app.services.rain_threshold import resolve_rain_threshold
 
 logger = logging.getLogger(__name__)
 FORECAST_HISTORY_MINUTES = 76
@@ -49,8 +50,7 @@ def build_forecast(db: Session, device_id=None, mqtt_client=None, now=None) -> d
          "pressure": float(r.pressure), "rain_raw": r.rain_raw, "rain_detected": r.rain_detected}
         for r in valid_records
     ]
-    cfg = db.query(SystemConfig).filter(SystemConfig.config_key == "rain_alert_threshold").first()
-    threshold = float(cfg.config_value) if cfg else settings.RAIN_ALERT_THRESHOLD
+    threshold, _, _ = resolve_rain_threshold(db)
     forecast = ForecastClient.get_forecast(measurements, threshold=threshold)
     forecast.update(
         history_window_minutes=FORECAST_HISTORY_MINUTES,

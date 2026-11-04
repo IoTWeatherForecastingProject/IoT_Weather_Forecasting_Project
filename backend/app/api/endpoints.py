@@ -15,6 +15,7 @@ from app.schemas.weather import (
 from app.services.weather_forecast import build_forecast, NoRecentMeasurements, UnusableMeasurements
 from app.services import analytics
 from app.services.optional_providers import integration_status
+from app.services.rain_threshold import resolve_rain_threshold
 
 router = APIRouter(prefix="/api/weather", tags=["Weather"])
 logger = logging.getLogger(__name__)
@@ -123,9 +124,8 @@ def get_weather_forecast(
 
 @router.get("/alerts/threshold", summary="Đọc ngưỡng cảnh báo hiện tại")
 def get_alert_threshold(db: Session = Depends(get_db)):
-    from app.config import settings
-    cfg = db.query(SystemConfig).filter(SystemConfig.config_key == "rain_alert_threshold").first()
-    return {"threshold": float(cfg.config_value) if cfg else settings.RAIN_ALERT_THRESHOLD}
+    threshold, source, updated_at = resolve_rain_threshold(db)
+    return {"threshold": threshold, "source": source, "updated_at": updated_at}
 
 
 @router.get("/sensor-health", summary="Kiểm tra sức khỏe cảm biến theo lịch sử của trạm")
