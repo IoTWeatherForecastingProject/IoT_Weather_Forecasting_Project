@@ -28,7 +28,7 @@
     </script>
     <!-- ApexCharts CDN -->
     <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1/dist/apexcharts.min.js"></script>
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/style.css?v=chart-navigation-1">
 </head>
 <body class="bg-[#090d16] text-slate-100 min-h-screen">
 
@@ -57,7 +57,7 @@
                         <span class="hidden" id="status-ping"></span>
                         <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" id="status-dot"></span>
                     </span>
-                    <span id="connection-status" class="text-amber-400">CONNECTING...</span>
+                    <span id="connection-status" class="text-amber-400">ĐANG KẾT NỐI…</span>
                 </div>
                 <span id="backend-status" class="hidden text-xs font-mono px-2 py-1 rounded bg-rose-500/10 text-rose-400 border border-rose-500/30">MẤT KẾT NỐI BACKEND</span>
 
@@ -69,6 +69,8 @@
 
     <!-- Main Container -->
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+        <p id="live-data-warning" role="status" aria-live="polite" class="hidden rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"></p>
 
         <!-- Anomaly & Rain Alert Banner (Hidden by default) -->
         <div id="alert-banner" class="hidden p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start space-x-3 text-amber-300">
@@ -87,7 +89,7 @@
             <!-- Temperature -->
             <div class="scada-card rounded-2xl p-5 relative overflow-hidden group hover:border-cyan-500/40 transition-all">
                 <div class="flex justify-between items-start mb-2">
-                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Nhiệt độ (BMP280)</span>
+                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Nhiệt độ không khí</span>
                     <span class="p-2 rounded-lg bg-orange-500/10 text-orange-400">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                     </span>
@@ -167,7 +169,7 @@
                 <div class="flex flex-wrap items-start justify-between gap-3">
                     <div>
                         <h2 class="text-base font-bold text-slate-100 tracking-wide">Chuỗi Thời Gian & Đối Chuẩn Khí Tượng</h2>
-                        <p class="text-xs text-slate-400">2 giờ gần nhất của trạm IoT so với dữ liệu tham chiếu Open-Meteo</p>
+                        <p class="text-xs text-slate-400">Số đo 2 giờ gần nhất và dữ liệu mô hình thời tiết Open-Meteo tại khu vực trạm</p>
                     </div>
                     <div class="flex rounded-lg border border-slate-700 overflow-hidden text-xs font-mono" role="tablist" id="chart-tabs">
                         <button type="button" data-var="temperature" class="chart-tab px-3 py-1.5" role="tab">Nhiệt độ</button>
@@ -175,9 +177,24 @@
                         <button type="button" data-var="pressure" class="chart-tab px-3 py-1.5 border-l border-slate-700" role="tab">Áp suất</button>
                     </div>
                 </div>
-                <div id="weather-chart" class="w-full h-72"></div>
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <p id="chart-navigation-help" class="text-xs text-slate-400">Lăn chuột để zoom tại con trỏ. Giữ Space và kéo ngang để di chuyển.</p>
+                    <button id="chart-reset-view" type="button" title="Về khung mặc định" aria-label="Về khung biểu đồ mặc định" class="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1 text-sm text-slate-200 hover:bg-slate-800">
+                        <span aria-hidden="true">⌂</span> Khung mặc định
+                    </button>
+                </div>
+                <div id="weather-chart" class="w-full h-72" tabindex="0" role="region" aria-label="Biểu đồ thời tiết" aria-describedby="chart-navigation-help"></div>
                 <p class="text-xs text-slate-500" id="chart-note">Đang tải lịch sử...</p>
             </div>
+
+            <section class="scada-card rounded-2xl p-4 sm:p-6 space-y-3" aria-labelledby="rain-history-title">
+                <div>
+                    <h2 id="rain-history-title" class="text-base font-bold text-slate-100 tracking-wide">Lịch sử mưa</h2>
+                    <p class="text-xs text-slate-400">Các lần tấm dò báo ướt trong 2 giờ gần nhất và số đo tại mẫu ướt đầu tiên.</p>
+                </div>
+                <p id="rain-history-note" class="text-sm text-slate-400">Đang tải lịch sử…</p>
+                <ul id="rain-history-list" class="space-y-2 max-h-72 overflow-y-auto"></ul>
+            </section>
 
             <!-- Sensor Health (SA-03) -->
             <div class="scada-card rounded-2xl p-4 sm:p-6 space-y-3">
@@ -256,16 +273,16 @@
                     </div>
                 </div>
 
-                <!-- 2-Way Closed-Loop Control Widget -->
+                <!-- Forecast alert threshold -->
                 <div class="border-t border-slate-800 pt-4 space-y-3">
-                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400 block">Điều Khiển Ngưỡng Cảnh Báo Phản Hồi</span>
+                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400 block">Cảnh báo dự báo mưa</span>
                     <div class="flex items-center justify-between text-xs font-mono">
-                        <span class="text-slate-400">Ngưỡng mưa kích hoạt còi:</span>
+                        <label for="threshold-slider" class="text-slate-400">Ngưỡng xác suất mưa</label>
                         <span class="text-cyan-400 font-bold text-sm" id="threshold-val">--</span>
                     </div>
-                    <input type="range" min="40" max="95" value="70" step="5" aria-label="Ngưỡng cảnh báo mưa" class="w-full accent-cyan-400 cursor-pointer" id="threshold-slider">
+                    <input type="range" min="40" max="95" value="70" step="5" class="w-full accent-cyan-400 cursor-pointer" id="threshold-slider">
                     <button id="btn-save-threshold" class="w-full py-2 px-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 text-xs font-semibold tracking-wider text-white transition-all shadow-lg shadow-cyan-900/30">
-                        CẬP NHẬT XUỐNG SERVER
+                        LƯU NGƯỠNG CẢNH BÁO
                     </button>
                     <span id="threshold-applied" class="text-xs text-center block text-slate-500 font-mono">Đang đọc ngưỡng từ server...</span>
                     <span id="threshold-status" class="text-xs text-center block text-slate-400" role="status"></span>
@@ -277,7 +294,7 @@
 
     </main>
 
-    <script src="js/app.js"></script>
+    <script src="js/app.js?v=forecast-alert-label-1"></script>
 </body>
 </html>
 

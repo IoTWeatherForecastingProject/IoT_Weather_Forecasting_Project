@@ -31,7 +31,10 @@ const CONFIG = {
     HEALTH_INTERVAL_MS: 30000,
     BENCHMARK_INTERVAL_MS: 10 * 60 * 1000,
     CHART_REDRAW_MS: 1000,                       // gom điểm WS, vẽ lại tối đa 1 lần/giây
+    CHART_MIN_SPAN_MS: 30000,
     WS_BACKOFF_MAX_MS: 30000,
+    WS_CONNECT_TIMEOUT_MS: 8000,
+    LIVE_DATA_TIMEOUT_MS: 30000,
     PRESSURE_TREND_HPA_PER_H: 1.0,
     THRESHOLD_MIN: 0.40,
     THRESHOLD_MAX: 0.95,
@@ -45,15 +48,21 @@ const VARIABLES = {
 
 const state = {
     ws: null,
+    wsStatus: "connecting",
+    wsOpenedAt: 0,
+    lastSampleAt: null,
     wsRetryMs: 1000,
     chart: null,
     chartVar: "temperature",
     chartDirty: false,
+    chartRange: null,
+    chartExtent: null,
     points: [],          // [{t, temperature, humidity, pressure}] tăng dần theo t
     reference: [],       // dữ liệu tham chiếu của đúng một source/cadence
     benchmarkReady: null, // null: chưa biết, false: endpoint chưa có
     threshold: null,
     historyFailed: false,
+    historyLoading: true,
     failures: {},        // đếm lỗi theo loại request để hiện trạng thái Backend
 };
 
@@ -84,6 +93,11 @@ function toMs(ts) {
 
 function timeLabel(ms) {
     return new Date(ms).toLocaleTimeString("vi-VN", { hour12: false });
+}
+
+function rainTimeLabel(ms) {
+    const date = new Date(ms);
+    return `${timeLabel(ms)} · ${date.toLocaleDateString("vi-VN")}`;
 }
 
 /** 404/405: Backend chưa có endpoint (hoặc chỉ có method khác), khác với lỗi mạng. */
@@ -125,15 +139,111 @@ function markBackend(kind, ok, err) {
 // --- 1. Đồng hồ -----------------------------------------------------------------
 
 function initClock() {
-    const tick = () => setText("live-clock", `${timeLabel(Date.now())} (Local)`);
+    const tick = () => {
+        setText("live-clock", `${timeLabel(Date.now())} (Local)`);
+        updateLiveDataWarning();
+    };
     tick();
     setInterval(tick, 1000);
 }
 
 // --- 2. Biểu đồ -----------------------------------------------------------------
 
+function clampChartRange({ min, max }) {
+    const extent = state.chartExtent;
+    if (!extent) return { min, max };
+    const width = extent.max - extent.min;
+    const span = Math.min(width, Math.max(CONFIG.CHART_MIN_SPAN_MS, max - min));
+    const center = (min + max) / 2;
+    const start = Math.max(extent.min, Math.min(center - span / 2, extent.max - span));
+    return { min: start, max: start + span };
+}
+
+function initChartNavigation(chartElement) {
+    let spaceHeld = false;
+    let drag = null;
+    let frame = 0;
+
+    function showRange(range) {
+        const extent = state.chartExtent;
+        if (!extent) return;
+        const next = range ? clampChartRange(range) : extent;
+        state.chartRange = next.min === extent.min && next.max === extent.max ? null : next;
+        if (frame) return;
+        frame = requestAnimationFrame(() => {
+            frame = 0;
+            if (state.chartExtent)
+                state.chart.updateOptions({ xaxis: state.chartRange || state.chartExtent }, false, false);
+        });
+    }
+
+    chartElement.addEventListener("wheel", (event) => {
+        const plot = chartElement.querySelector(".apexcharts-grid")?.getBoundingClientRect();
+        const range = state.chartRange || state.chartExtent;
+        if (!plot?.width || !range || drag || !event.deltaY ||
+            event.clientX < plot.left || event.clientX > plot.right ||
+            event.clientY < plot.top || event.clientY > plot.bottom) return;
+        event.preventDefault();
+        const fraction = (event.clientX - plot.left) / plot.width;
+        const span = range.max - range.min;
+        const anchor = range.min + span * fraction;
+        const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 120 : 1);
+        const nextSpan = Math.max(CONFIG.CHART_MIN_SPAN_MS, Math.min(
+            state.chartExtent.max - state.chartExtent.min,
+            span * Math.exp(Math.max(-1, Math.min(1, delta * 0.002)))
+        ));
+        showRange({ min: anchor - nextSpan * fraction, max: anchor + nextSpan * (1 - fraction) });
+    }, { passive: false });
+
+    function releaseSpace() {
+        spaceHeld = false;
+        chartElement.classList.remove("chart-pan-ready");
+        if (drag && chartElement.hasPointerCapture(drag.pointerId))
+            chartElement.releasePointerCapture(drag.pointerId);
+        drag = null;
+        chartElement.classList.remove("chart-panning");
+    }
+
+    document.addEventListener("keydown", (event) => {
+        if (event.code !== "Space" ||
+            event.target.closest?.("input, textarea, select, [contenteditable]") ||
+            (!chartElement.matches(":hover") && document.activeElement !== chartElement)) return;
+        event.preventDefault();
+        spaceHeld = true;
+        chartElement.classList.add("chart-pan-ready");
+    });
+    document.addEventListener("keyup", (event) => {
+        if (event.code === "Space" && spaceHeld) releaseSpace();
+    });
+    window.addEventListener("blur", releaseSpace);
+
+    chartElement.addEventListener("pointerdown", (event) => {
+        const plot = chartElement.querySelector(".apexcharts-grid")?.getBoundingClientRect();
+        const range = state.chartRange || state.chartExtent;
+        if (!spaceHeld || event.button !== 0 || !range || !plot?.width ||
+            event.clientX < plot.left || event.clientX > plot.right ||
+            event.clientY < plot.top || event.clientY > plot.bottom) return;
+        event.preventDefault();
+        chartElement.setPointerCapture(event.pointerId);
+        drag = { pointerId: event.pointerId, x: event.clientX, range, width: plot.width };
+        chartElement.classList.add("chart-panning");
+    });
+    chartElement.addEventListener("pointermove", (event) => {
+        if (drag?.pointerId !== event.pointerId) return;
+        const { min, max } = drag.range;
+        const shift = (drag.x - event.clientX) * (max - min) / drag.width;
+        showRange({ min: min + shift, max: max + shift });
+    });
+    chartElement.addEventListener("lostpointercapture", () => {
+        drag = null;
+        chartElement.classList.remove("chart-panning");
+    });
+    $("chart-reset-view").addEventListener("click", () => showRange(null));
+}
+
 function initChart() {
-    state.chart = new ApexCharts($("weather-chart"), {
+    const chartElement = $("weather-chart");
+    state.chart = new ApexCharts(chartElement, {
         chart: {
             type: "line",
             height: 288,
@@ -150,6 +260,7 @@ function initChart() {
         noData: { text: "Chưa có dữ liệu", style: { color: "#94a3b8" } },
         xaxis: {
             type: "datetime",
+            tooltip: { enabled: false },
             labels: {
                 datetimeUTC: false,
                 style: { colors: "#64748b", fontSize: "11px", fontFamily: "JetBrains Mono" },
@@ -161,9 +272,35 @@ function initChart() {
         },
         grid: { borderColor: "#1e293b", strokeDashArray: 4 },
         legend: { position: "top", horizontalAlign: "right", labels: { colors: "#cbd5e1" } },
-        tooltip: { theme: "dark", x: { format: "HH:mm:ss dd/MM" } },
+        tooltip: {
+            theme: "dark",
+            shared: false,
+            intersect: false,
+            followCursor: true,
+            x: { format: "HH:mm:ss dd/MM" },
+        },
     });
     state.chart.render();
+    initChartNavigation(chartElement);
+    const positionTooltip = (event) => {
+        const tooltip = chartElement.querySelector(".apexcharts-tooltip");
+        if (!tooltip?.offsetParent) return;
+        // ApexCharts 3 can anchor a non-shared tooltip to the series rather than
+        // the cursor when series have different timestamps. Position its box here.
+        const bounds = tooltip.offsetParent.getBoundingClientRect();
+        const x = event.clientX - bounds.left;
+        const y = event.clientY - bounds.top;
+        const gap = 10;
+        const left = x + gap + tooltip.offsetWidth <= bounds.width
+            ? x + gap : Math.max(0, x - gap - tooltip.offsetWidth);
+        const top = y + gap + tooltip.offsetHeight <= bounds.height
+            ? y + gap : Math.max(0, y - gap - tooltip.offsetHeight);
+        tooltip.style.setProperty("--cursor-left", `${left}px`);
+        tooltip.style.setProperty("--cursor-top", `${top}px`);
+        tooltip.classList.add("cursor-positioned");
+    };
+    chartElement.addEventListener("mousemove", positionTooltip);
+    chartElement.addEventListener("pointerdown", positionTooltip);
 
     document.querySelectorAll(".chart-tab").forEach((btn) => {
         btn.addEventListener("click", () => {
@@ -171,7 +308,9 @@ function initChart() {
             renderChart();
         });
     });
-    setInterval(() => { if (state.chartDirty) renderChart(); }, CONFIG.CHART_REDRAW_MS);
+    setInterval(() => {
+        if (state.chartDirty) renderChart();
+    }, CONFIG.CHART_REDRAW_MS);
 }
 
 function renderChart() {
@@ -186,30 +325,141 @@ function renderChart() {
     const iot = state.points.filter((p) => p.t >= start && isNum(p[v])).map((p) => [p.t, p[v]]);
     const ref = state.reference.filter((p) => p.t >= start && isNum(p[v])).map((p) => [p.t, p[v]]);
 
+    const nonEmptySeries = [iot, ref].filter((series) => series.length);
+    state.chartExtent = null;
+    if (nonEmptySeries.length) {
+        const first = Math.min(...nonEmptySeries.map((series) => series[0][0]));
+        const last = Math.max(...nonEmptySeries.map((series) => series[series.length - 1][0]));
+        state.chartExtent = { min: first, max: Math.max(first + CONFIG.CHART_MIN_SPAN_MS, last) };
+    }
+    if (state.chartRange && state.chartExtent) state.chartRange = clampChartRange(state.chartRange);
+    const xaxis = state.chartRange && state.chartExtent
+        ? clampChartRange(state.chartRange)
+        : state.chartExtent || { min: undefined, max: undefined };
+
+    let min, max, tickAmount;
+    if (v === "temperature") {
+        // Center on the typical station reading. Round the center to 2°C
+        // steps and keep at least 16°C of span to avoid zooming into noise.
+        const temperatures = iot.map(([, temperature]) => temperature).sort((a, b) => a - b);
+        const middle = Math.floor(temperatures.length / 2);
+        const median = temperatures.length
+            ? (temperatures[middle] + temperatures[Math.floor((temperatures.length - 1) / 2)]) / 2
+            : 32;
+        const center = 2 * Math.round(median / 2);
+        let halfSpan = 8;
+        for (const series of [iot, ref]) {
+            for (const [, temperature] of series) {
+                halfSpan = Math.max(halfSpan, 4 * Math.ceil((Math.abs(temperature - center) + 1) / 4));
+            }
+        }
+        min = center - halfSpan;
+        max = center + halfSpan;
+        tickAmount = 4;
+    }
+
     state.chart.updateOptions({
+        xaxis,
+        series: [
+            { name: `Trạm IoT (${meta.unit})`, data: iot },
+            { name: `Tham chiếu Open-Meteo (${meta.unit})`, data: ref },
+        ],
         yaxis: {
+            min,
+            max,
+            tickAmount,
             decimalsInFloat: 1,
             title: { text: `${meta.label} (${meta.unit})`, style: { color: "#94a3b8" } },
             labels: { style: { colors: "#64748b", fontSize: "11px", fontFamily: "JetBrains Mono" } },
         },
     }, false, false);
-    state.chart.updateSeries([
-        { name: `Trạm IoT (${meta.unit})`, data: iot },
-        { name: `Tham chiếu ${CONFIG.REF_SOURCE} (${meta.unit})`, data: ref },
-    ], false);
 
     let note = state.historyFailed && !iot.length
         ? "Không tải được lịch sử từ Backend"
         : `${iot.length} điểm IoT trong 2 giờ gần nhất`;
     if (state.benchmarkReady === false) note += " · chưa có endpoint đối chuẩn /benchmark";
-    else if (state.benchmarkReady) note += ` · ${ref.length} điểm tham chiếu`;
+    else if (state.benchmarkReady) note += ref.length
+        ? ` · ${ref.length} điểm Open-Meteo`
+        : " · Chưa có dữ liệu Open-Meteo trong 2 giờ gần nhất";
     setText("chart-note", note);
+    renderRainHistory();
+}
+
+function renderRainHistory() {
+    const now = Date.now();
+    const start = now - CONFIG.HISTORY_WINDOW_MS;
+    const events = [];
+    let previous = null;
+    let event = null;
+    let hasRainReadings = false;
+    for (const point of state.points) {
+        if (point.t > now) break;
+        if (point.t < start) {
+            previous = point;
+            continue;
+        }
+        if (point.raining !== null) hasRainReadings = true;
+        if (event && (point.t - event.lastWet.t > CONFIG.LIVE_DATA_TIMEOUT_MS || point.raining === null)) {
+            event.interrupted = true;
+            event = null;
+        }
+        if (point.raining === true) {
+            if (!event) {
+                event = { firstWet: point, lastWet: point, dryAt: null, interrupted: false,
+                    hasDryBefore: previous?.raining === false && point.t - previous.t <= CONFIG.LIVE_DATA_TIMEOUT_MS };
+                events.push(event);
+            }
+            event.lastWet = point;
+        } else if (point.raining === false && event) {
+            event.dryAt = point.t;
+            event = null;
+        }
+        previous = point;
+    }
+
+    const list = $("rain-history-list");
+    const items = events.reverse().map(({ firstWet, lastWet, dryAt, interrupted, hasDryBefore }) => {
+        const item = document.createElement("li");
+        item.className = "rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-sm";
+        const time = document.createElement("p");
+        time.className = "font-semibold text-slate-100";
+        time.textContent = `${hasDryBefore ? "Chuyển sang ướt" : "Ghi nhận ướt"} lúc ${rainTimeLabel(firstWet.t)}`;
+        const readings = document.createElement("p");
+        readings.className = "mt-1 font-mono text-cyan-300";
+        readings.textContent = [
+            `Nhiệt độ ${fmt(firstWet.temperature, 1, " °C")}`,
+            `Độ ẩm ${fmt(firstWet.humidity, 1, "%")}`,
+            `Áp suất ${fmt(firstWet.pressure, 1, " hPa")}`,
+        ].join(" · ");
+        const end = document.createElement("p");
+        end.className = "mt-1 text-xs text-slate-400";
+        if (dryAt !== null) {
+            end.textContent = `Ghi nhận khô lại lúc ${rainTimeLabel(dryAt)}`;
+        } else if (interrupted || now - lastWet.t > CONFIG.LIVE_DATA_TIMEOUT_MS) {
+            end.textContent = `Mẫu ướt cuối lúc ${rainTimeLabel(lastWet.t)}. Chưa rõ lúc khô lại.`;
+        } else {
+            end.textContent = "Tấm dò vẫn báo ướt";
+        }
+        item.append(time, readings, end);
+        return item;
+    });
+    list.replaceChildren(...items);
+
+    let note = "Chưa có số đo mưa trong 2 giờ gần nhất.";
+    if (state.historyLoading) note = "Đang tải lịch sử…";
+    else if (state.historyFailed) note = "Không tải đủ lịch sử. Danh sách hiển thị các mẫu đã nhận.";
+    else if (items.length) note = `${items.length} lần ghi nhận tấm dò ướt`;
+    else if (hasRainReadings) note = "Tấm dò chưa báo ướt trong các mẫu đã lưu.";
+    setText("rain-history-note", note);
 }
 
 function addPoint(record) {
     const t = toMs(record.timestamp);
     if (t === null) return;
-    const point = { t };
+    const point = {
+        t,
+        raining: record.rain_detected === 1 ? true : record.rain_detected === 0 ? false : null,
+    };
     for (const v of Object.keys(VARIABLES)) {
         const n = Number(record[v]);
         point[v] = record[v] !== null && record[v] !== undefined && Number.isFinite(n) ? n : null;
@@ -243,11 +493,12 @@ async function loadHistory() {
         }
         state.historyFailed = false;
         markBackend("history", true);
-        updatePressureTrend();
-        renderChart();
     } catch (err) {
         state.historyFailed = true;
         markBackend("history", false, err);
+    } finally {
+        state.historyLoading = false;
+        updatePressureTrend();
         renderChart();
     }
 }
@@ -255,6 +506,10 @@ async function loadHistory() {
 // --- 3. Thẻ chỉ số --------------------------------------------------------------
 
 function updateTelemetryCards(data) {
+    const timestamp = toMs(data.timestamp);
+    if (timestamp === null || (state.lastSampleAt !== null && timestamp < state.lastSampleAt)) return;
+    state.lastSampleAt = timestamp;
+    updateLiveDataWarning();
     setText("card-temp", fmt(data.temperature, 1));
     setText("card-press", fmt(data.pressure, 1));
     setText("card-hum", fmt(data.humidity, 1));
@@ -308,25 +563,46 @@ async function fetchCurrent() {
         markBackend("current", true);
         // Backend trả giá trị mẫu kèm status="waiting_data" khi DB trống -> không hiển thị
         if (data.status === "waiting_data") {
-            clearTelemetryCards("CHỜ DỮ LIỆU");
+            if (state.lastSampleAt === null) clearTelemetryCards("CHỜ DỮ LIỆU");
             return;
         }
         updateTelemetryCards(data);
         addPoint(data);
     } catch (err) {
         markBackend("current", false, err);
-        clearTelemetryCards("--");
+        if (state.lastSampleAt === null) clearTelemetryCards("--");
     }
 }
 
 // --- 4. WebSocket ---------------------------------------------------------------
 
+function updateLiveDataWarning() {
+    let message = "";
+    if (state.wsStatus === "reconnecting") {
+        message = "Mất kết nối trực tiếp. Đang tự kết nối lại.";
+    } else if (state.wsStatus === "connected" &&
+        Date.now() - (state.lastSampleAt ?? state.wsOpenedAt) > CONFIG.LIVE_DATA_TIMEOUT_MS) {
+        message = "Không nhận được số đo mới từ trạm trong hơn 30 giây.";
+    }
+    if (message && state.lastSampleAt !== null) {
+        message += ` Số đo gần nhất lúc ${timeLabel(state.lastSampleAt)}.`;
+    }
+    const warning = $("live-data-warning");
+    if (warning.textContent !== message) {
+        warning.textContent = message;
+        if (state.lastSampleAt !== null) state.chartDirty = true;
+    }
+    warning.classList.toggle("hidden", !message);
+}
+
 function setWsStatus(kind) {
     const styles = {
-        connecting: ["CONNECTING...", "text-amber-400", "bg-amber-500", false],
+        connecting: ["ĐANG KẾT NỐI…", "text-amber-400", "bg-amber-500", false],
         connected: ["WS CONNECTED", "text-emerald-400", "bg-emerald-500", true],
-        reconnecting: ["RECONNECTING...", "text-amber-400", "bg-amber-500", false],
+        reconnecting: ["MẤT KẾT NỐI", "text-rose-400", "bg-rose-500", false],
     }[kind];
+    state.wsStatus = kind;
+    updateLiveDataWarning();
     setText("connection-status", styles[0], styles[1]);
     $("status-dot").className = `relative inline-flex rounded-full h-2.5 w-2.5 ${styles[2]}`;
     $("status-ping").className = styles[3]
@@ -340,13 +616,19 @@ function connectWebSocket() {
     try {
         ws = new WebSocket(CONFIG.WS_URL);
     } catch (e) {
+        setWsStatus("reconnecting");
         scheduleReconnect();
         return;
     }
     state.ws = ws;
+    const timeout = setTimeout(() => {
+        if (ws.readyState === WebSocket.CONNECTING) ws.close();
+    }, CONFIG.WS_CONNECT_TIMEOUT_MS);
 
     ws.onopen = () => {
+        clearTimeout(timeout);
         state.wsRetryMs = 1000;
+        state.wsOpenedAt = Date.now();
         setWsStatus("connected");
     };
     ws.onmessage = (event) => {
@@ -363,6 +645,7 @@ function connectWebSocket() {
         updatePressureTrend();
     };
     ws.onclose = () => {
+        clearTimeout(timeout);
         setWsStatus("reconnecting");
         scheduleReconnect();
     };
@@ -413,6 +696,13 @@ const HEALTH_STYLES = {
     UNKNOWN: "bg-slate-800 text-slate-400 border-slate-700",
 };
 
+const HEALTH_UNKNOWN_REASONS = {
+    analytics_not_integrated: "Phân tích sức khỏe cảm biến đang tắt",
+    analytics_unavailable: "Bộ phân tích cảm biến chưa sẵn sàng",
+    analytics_failed: "Không phân tích được số đo cảm biến",
+    stale_data: "Dữ liệu trạm đã cũ",
+};
+
 function renderHealth(status, anomalies, note) {
     const key = HEALTH_STYLES[status] ? status : "UNKNOWN";
     setText("health-badge", key, `text-xs font-mono font-bold px-2.5 py-1 rounded-full border ${HEALTH_STYLES[key]}`);
@@ -443,10 +733,13 @@ async function fetchSensorHealth() {
         const n = (data.anomalies || []).length;
         const checked = toMs(data.checked_at);
         const when = checked ? ` · bản ghi lúc ${timeLabel(checked)}` : "";
-        renderHealth(data.status, data.anomalies,
-            data.status === "UNKNOWN" ? (data.reason === "stale_data"
-                ? `Dữ liệu trạm đã cũ${when}` : `Chưa có dữ liệu đo trong ${data.window_minutes || 360} phút gần nhất`)
-                : n ? `${n} dị thường${when}` : `Không phát hiện dị thường${when}`);
+        let note = n ? `${n} dị thường` : "Không phát hiện dị thường";
+        if (data.status === "UNKNOWN") {
+            note = data.reason === "no_data"
+                ? `Chưa có dữ liệu đo trong ${data.window_minutes || 360} phút gần nhất`
+                : HEALTH_UNKNOWN_REASONS[data.reason] || "Chưa đánh giá được sức khỏe cảm biến";
+        }
+        renderHealth(data.status, data.anomalies, note + when);
     } catch (err) {
         markBackend("health", false, err);
         renderHealth("UNKNOWN", [], isMissingEndpoint(err)
@@ -563,7 +856,7 @@ function initTwoWayControl() {
         }
         btnSave.disabled = true;
         btnSave.textContent = "ĐANG GỬI...";
-        statusEl.textContent = "Đang gửi lệnh xuống backend...";
+        statusEl.textContent = "Đang lưu ngưỡng cảnh báo...";
         statusEl.className = "text-xs text-center block text-cyan-400";
         clearTimeout(clearTimer);
 
@@ -595,7 +888,7 @@ function initTwoWayControl() {
             statusEl.className = "text-xs text-center block text-rose-400";
         } finally {
             btnSave.disabled = false;
-            btnSave.textContent = "CẬP NHẬT XUỐNG SERVER";
+            btnSave.textContent = "LƯU NGƯỠNG CẢNH BÁO";
             clearTimer = setTimeout(() => { statusEl.textContent = ""; }, 5000);
         }
     });
@@ -608,9 +901,9 @@ function initTwoWayControl() {
 document.addEventListener("DOMContentLoaded", () => {
     setText("station-id", CONFIG.DEVICE_ID);
     initClock();
+    connectWebSocket();
     initChart();
     initTwoWayControl();
-    connectWebSocket();
 
     loadHistory().then(fetchCurrent);
     loadThreshold().then(fetchForecast);

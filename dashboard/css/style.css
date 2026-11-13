@@ -59,6 +59,29 @@ body {
     color: #22d3ee;
 }
 
+#weather-chart .apexcharts-tooltip {
+    transition: none;
+}
+
+#weather-chart .apexcharts-tooltip.cursor-positioned {
+    left: var(--cursor-left) !important;
+    top: var(--cursor-top) !important;
+}
+
+#weather-chart.chart-pan-ready,
+#weather-chart.chart-pan-ready * {
+    cursor: grab !important;
+}
+
+#weather-chart.chart-panning,
+#weather-chart.chart-panning * {
+    cursor: grabbing !important;
+}
+
+#weather-chart.chart-panning .apexcharts-tooltip {
+    visibility: hidden;
+}
+
 /* Không để nội dung dài (thông điệp anomaly) làm tràn ngang trên mobile */
 #health-list li {
     overflow-wrap: anywhere;
