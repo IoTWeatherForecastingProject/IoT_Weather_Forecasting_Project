@@ -2,7 +2,7 @@
 
 Cập nhật ngày 27/10/2026 theo những linh kiện người dùng đã xác nhận. Link Shopee bên dưới là **link tham khảo để chọn đúng chủng loại**, không phải đơn hàng đã được xác nhận về giá, tồn kho hay biến thể. Kiểm tra lại ảnh, thông số và lựa chọn phân loại trước khi thanh toán. Giá là khoảng dự trù, không gồm phí vận chuyển.
 
-**Ưu tiên hiện tại:** người dùng xác nhận chưa có BMP280, bộ mưa AO và OLED. Bổ sung BMP280 I2C 3,3V và bộ mưa AO hỗ trợ 3,3V trước để đủ dữ liệu đo thật; OLED SH1106 có thể thêm sau vì firmware tiếp tục chạy khi thiếu màn hình. NodeMCU, DHT11, relay D6/jumper H và còi qua COM/NO đã qua thử chức năng trên bàn; không mua lại. Cáp USB dữ liệu và pin dự phòng đã được dùng trong quá trình thử. Còi kêu rồi ngừng trong xung 3 giây; chưa đo điện áp/dòng hay nghiệm thu dài hạn.
+**Cập nhật 03/11/2026:** người dùng đã nhận đủ linh kiện, module áp suất đã hàn chân và chờ nhận dạng/đọc thử. DHT11, OLED, mưa DO đã được kiểm tra; relay/còi trên breadboard hiện dùng **D0/GPIO16**, đã thử xung 3 giây đạt. Xem [Mốc 02](hardware_checkpoints/MOC_02_BREADBOARD_RELAY_D0_2026-11-03.md). AO/A0 chưa được kiểm tra điện áp, chưa nghiệm thu cả trạm.
 
 Đối chiếu chủng loại: [BMP280 breakout và chân I2C theo Adafruit](https://learn.adafruit.com/adafruit-bmp280-barometric-pressure-plus-temperature-sensor-breakout/pinouts), [module mưa AO/DO 3,3–5V theo SunFounder](https://docs.sunfounder.com/projects/umsk/en/latest/01_components_basic/15-component_raindrop.html). Đây là tài liệu của các module tham chiếu, không xác nhận mọi module bán dưới cùng tên có cùng sơ đồ/chân. Trước khi đấu cần ảnh/module cụ thể; đường AO → A0 vẫn phải kiểm tra mức điện áp riêng.
 
@@ -53,9 +53,9 @@ Phần lắp ngoài trời dự trù thêm khoảng **110–260 nghìn ₫**, t�
 
 1. Xác nhận chính xác biến thể ESP8266 và mức điện áp **A0** của board. ADC của chip ESP8266 là khoảng 0–1 V, nhưng một số board NodeMCU có chia áp trên board; không nối AO 3,3V/5V vào A0 khi chưa kiểm tra.
 2. Cấp cảm biến mưa ở **3,3V** nếu module hỗ trợ; nếu chỉ hoạt động 5V, cần chia áp/đổi mức cho AO hoặc chọn module 3,3V. Đọc giá trị khô và ướt rồi chỉnh `RAIN_ANALOG_THRESHOLD` trong `firmware/include/weather_config.h`. Nếu module cho giá trị ướt *cao hơn* giá trị khô, cần đảo điều kiện so sánh trong firmware.
-3. Kiểm tra relay nhận được mức điều khiển **3,3V** từ D6. Chọn HIGH/LOW trên jumper và cập nhật `RELAY_ACTIVE_LEVEL`. Nguồn 5V đi qua tiếp điểm **COM–NO** tới còi, không đi qua GPIO; nối GND chung phần điều khiển khi module yêu cầu.
+3. Kiểm tra relay nhận được mức điều khiển **3,3V** từ D0. Chọn HIGH/LOW trên jumper và cập nhật `RELAY_ACTIVE_LEVEL`. Nguồn 5V đi qua tiếp điểm **COM–NO** tới còi, không đi qua GPIO; nối GND chung phần điều khiển khi module yêu cầu.
 4. Buzzer chủ động 5V sẽ kêu khi cấp 5V trực tiếp. Firmware bật relay **một lần trong 3 giây**, LED tiếp tục nháy trong 10 giây. Nếu còi thụ động cần phần phát xung riêng.
-5. BMP280 nối 3,3V, GND, SDA→D2, SCL→D1; OLED SH1106 3,3V nối GND→GND, VCC→3V3, SCL→D1, SDA→D2 và chia sẻ bus I2C. DHT11 3,3V nối DATA→D5, thêm kéo lên 10 kΩ nếu là cảm biến trần. LED nối D7 qua điện trở; relay IN nối D6. Kiểm tra `weather_config.h` trước khi nạp.
+5. BMP280 nối 3,3V, GND, SDA→D2, SCL→D1; OLED SH1106 3,3V nối GND→GND, VCC→3V3, SCL→D1, SDA→D2 và chia sẻ bus I2C. DHT11 3,3V nối DATA→D5, thêm kéo lên 10 kΩ nếu là cảm biến trần. Ở cấu hình trạm chính, LED nối D7 qua điện trở; mạch thử hiện đang dùng D7 nhận DO mưa nên không nối thêm LED; relay IN nối D0. Kiểm tra `weather_config.h` trước khi nạp.
 6. Cấp NodeMCU qua micro-USB 5V. Nếu lấy 5V USB từ chân VIN/VU để cấp relay VCC và còi, xác nhận đường chân thực tế và thử điện áp khi cả relay/còi hoạt động. 5V→COM relay, NO→cực dương còi, cực âm còi→GND; nối GND relay với GND NodeMCU. Không cấp relay/còi từ chân 3V3 và không đưa 12V trực tiếp vào board.
 
 MQTT broker, cơ sở dữ liệu, backend, AI và dashboard có thể chạy trên máy tính hiện có; không cần mua máy chủ để thử dự án. Chưa thể xác nhận giá cuối cùng hay tồn kho Shopee tại thời điểm thanh toán.
