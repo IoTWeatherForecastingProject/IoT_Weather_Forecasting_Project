@@ -143,6 +143,29 @@ class WeatherBenchmarkCrawler:
             parse, SOURCE_METEO_15MIN,
         )
 
+    def fetch_open_meteo_recent(self) -> list[ReferenceRecord]:
+        """Fill the live chart with recent 15-minute model values."""
+        def parse(payload):
+            series = payload["minutely_15"]
+            timestamps = series["time"]
+            columns = [series[key] for key in METEO_VARIABLES]
+            if any(len(column) != len(timestamps) for column in columns):
+                raise ValueError("15-minute arrays have different lengths")
+            now = self.now().astimezone(UTC)
+            return [
+                self._meteo_record(SOURCE_METEO_15MIN, timestamp, values)
+                for timestamp, *values in zip(timestamps, *columns)
+                if _parse_timestamp(timestamp) <= now and any(value is not None for value in values[:3])
+            ]
+
+        return self._fetch(
+            "https://api.open-meteo.com/v1/forecast",
+            {"latitude": self.lat, "longitude": self.lon, "timezone": "UTC",
+             "minutely_15": ",".join(METEO_VARIABLES),
+             "past_minutely_15": 8, "forecast_minutely_15": 1},
+            parse, SOURCE_METEO_15MIN,
+        )
+
     def fetch_open_meteo_history(
         self, past_days: int,
     ) -> list[ReferenceRecord]:
@@ -374,6 +397,8 @@ def parse_args(argv=None):
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--once", action="store_true")
     mode.add_argument("--loop", action="store_true")
+    mode.add_argument("--recent-15min", action="store_true",
+                      help="Fill the last two hours of Open-Meteo reference points")
     mode.add_argument("--backfill-days", type=int, choices=range(1, 93),
                       metavar="N")
     parser.add_argument("--interval", type=float)
@@ -384,6 +409,10 @@ def parse_args(argv=None):
     parser.add_argument("--lon", type=float, default=106.660172)
     parser.add_argument("--csv", type=Path)
     args = parser.parse_args(argv)
+    if args.recent_15min:
+        if args.source == "openweather":
+            parser.error("--recent-15min requires Open-Meteo")
+        args.source = "open-meteo"
     if args.interval is not None and not args.loop:
         parser.error("--interval requires --loop")
     args.interval = 900 if args.interval is None else args.interval
@@ -403,6 +432,8 @@ def run_cycle(args, crawler) -> tuple[int, int]:
     if args.source in ("open-meteo", "all"):
         if args.backfill_days:
             records.extend(crawler.fetch_open_meteo_history(args.backfill_days))
+        elif args.recent_15min:
+            records.extend(crawler.fetch_open_meteo_recent())
         else:
             records.extend(crawler.fetch_open_meteo_current())
     if args.source in ("openweather", "all"):
