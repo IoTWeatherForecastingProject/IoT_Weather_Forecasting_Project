@@ -1,22 +1,32 @@
-/** UART-only, unloaded relay check. NodeMCU D6/GPIO12 -> IN, jumper H.
+/** UART-only relay check. NodeMCU D6/GPIO12 -> IN, jumper H.
  * Remove the IN-to-DC+ bridge before attaching D6. DHT11 remains on D5.
  * Starts LOW and requires RUN\n over UART; at most three pulses per boot.
+ * RELAY_CHECK_SINGLE_PULSE limits the firmware to one pulse for buzzer trials.
  * Logged GPIO commands do not confirm physical coil/contact operation.
  */
 #include <Arduino.h>
 #include <DHT.h>
 #include <string.h>
 
-constexpr uint8_t RELAY_PIN = 12;
+#ifndef RELAY_CHECK_GPIO
+#define RELAY_CHECK_GPIO 12
+#endif
+constexpr uint8_t RELAY_PIN = RELAY_CHECK_GPIO;
+static_assert(RELAY_PIN == 12 || RELAY_PIN == 16, "Diagnostic supports D6 or D0 only");
 constexpr uint8_t DHT_PIN = 14;
 constexpr uint32_t ON_MS = 3000;
 constexpr uint32_t OFF_MS = 5000;
 constexpr uint32_t SAMPLE_MS = 2500;
+#ifdef RELAY_CHECK_SINGLE_PULSE
+constexpr uint8_t PULSES = 1;
+#else
 constexpr uint8_t PULSES = 3;
+#endif
 DHT sensor(DHT_PIN, DHT11);
 bool running = false;
 bool used = false;
 bool outputHigh = false;
+uint8_t senseChecks = 0;
 uint8_t cycle = 0;
 uint32_t phaseStarted = 0;
 uint32_t lastSample = 0;
@@ -25,10 +35,10 @@ uint8_t commandLength = 0;
 bool commandOverflow = false;
 
 void report(const char* event) {
-    Serial.printf("{\"test\":\"RELAY\",\"event\":\"%s\",\"gpio\":12,"
-                  "\"commanded_level\":\"%s\",\"cycle\":%u,\"used\":%s,"
+    Serial.printf("{\"test\":\"RELAY\",\"event\":\"%s\",\"gpio\":%u,"
+                  "\"commanded_level\":\"%s\",\"observed_level\":\"%s\",\"cycle\":%u,\"used\":%s,"
                   "\"running\":%s,\"uptime_ms\":%lu}\n",
-                  event, outputHigh ? "HIGH" : "LOW", cycle,
+                  event, RELAY_PIN, outputHigh ? "HIGH" : "LOW", digitalRead(RELAY_PIN) ? "HIGH" : "LOW", cycle,
                   used ? "true" : "false", running ? "true" : "false",
                   static_cast<unsigned long>(millis()));
 }
@@ -37,6 +47,7 @@ void setOutput(bool high) {
     digitalWrite(RELAY_PIN, high ? HIGH : LOW);
     outputHigh = high;
     phaseStarted = millis();
+    senseChecks = 0;
     report("gpio_command");
 }
 
@@ -64,6 +75,11 @@ void handleCommand() {
 }
 
 void setup() {
+    // Keep the old relay route inactive while transitioning to the D0 trial.
+    if (RELAY_PIN != 12) {
+        digitalWrite(12, LOW);
+        pinMode(12, OUTPUT);
+    }
     digitalWrite(RELAY_PIN, LOW);
     pinMode(RELAY_PIN, OUTPUT);
     Serial.begin(115200);
@@ -84,6 +100,14 @@ void loop() {
             running = false;
             report("complete");
         }
+    }
+
+    // Check the GPIO input register after settling and midway through the pulse.
+    // Digital readback is not a voltage/current or relay-contact measurement.
+    if (running && outputHigh && senseChecks < 2 &&
+        static_cast<uint32_t>(millis() - phaseStarted) >= (senseChecks == 0 ? 100U : 1500U)) {
+        ++senseChecks;
+        report("pin_check");
     }
 
     // Bounded work per pass, even if a host sends excessive serial input.

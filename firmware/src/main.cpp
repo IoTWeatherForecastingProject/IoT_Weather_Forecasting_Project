@@ -19,6 +19,7 @@
 #include "config.h.example"
 #endif
 #include "station_logic.h"
+#include "bmp_quality.h"
 
 static_assert(SAMPLING_INTERVAL_MS >= 2000, "DHT11 requires a slow sample interval");
 static_assert(RELAY_ON_TIME_MS <= ALERT_DURATION_MS, "Relay duration exceeds alert duration");
@@ -33,6 +34,7 @@ station::MovingAverage<SENSOR_FILTER_WINDOW> sensorFilter;
 station::Reading latestReading;
 station::AlertState alert;
 bool bmpReady = false;
+uint8_t activeBmpAddress = 0;
 bool displayReady = false;
 bool sensorDataReady = false;
 unsigned long lastSampleTime = 0;
@@ -48,12 +50,30 @@ bool initializeBMP() {
     const uint8_t addresses[] = {BMP_I2C_ADDRESS, BMP_I2C_FALLBACK_ADDRESS};
     for (uint8_t address : addresses) {
         if (i2cPresent(address) && bmp.begin(address)) {
+            activeBmpAddress = address;
             Serial.printf("[BMP280] I2C 0x%02X OK\n", address);
             return true;
         }
     }
     Serial.println("[BMP280] Khong tim thay; thu lai o chu ky do tiep theo.");
     return false;
+}
+
+bool readBmpBlock(uint8_t reg, uint8_t *data, uint8_t length) {
+    Wire.beginTransmission(activeBmpAddress);
+    Wire.write(reg);
+    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.requestFrom(activeBmpAddress, length) != length) return false;
+    for (uint8_t i = 0; i < length; ++i) data[i] = Wire.read();
+    return true;
+}
+
+const char *bmpRawProblem() {
+    uint8_t raw[6] = {}, ctrl = 0;
+    const bool ok = readBmpBlock(0xF7, raw, sizeof(raw)) && readBmpBlock(0xF4, &ctrl, 1);
+    const uint32_t pressureAdc = (uint32_t(raw[0]) << 12) | (uint32_t(raw[1]) << 4) | (raw[2] >> 4);
+    const uint32_t temperatureAdc = (uint32_t(raw[3]) << 12) | (uint32_t(raw[4]) << 4) | (raw[5] >> 4);
+    return station::bmpRawIssue(ok, temperatureAdc, pressureAdc, ctrl);
 }
 
 void updateOLED() {
@@ -137,9 +157,11 @@ void connectMQTT() {
 
 void sampleAndPublish() {
     if (!bmpReady) bmpReady = initializeBMP();
+    const char *bmpIssue = bmpReady ? bmpRawProblem() : "bmp_not_ready";
+    if (bmpIssue) Serial.printf("[BMP280] Mau khong hop le: %s\n", bmpIssue);
     station::Reading raw;
-    raw.temperature = bmpReady ? bmp.readTemperature() : NAN;
-    raw.pressure = bmpReady ? bmp.readPressure() / 100.0f : NAN;
+    raw.temperature = !bmpIssue ? bmp.readTemperature() : NAN;
+    raw.pressure = !bmpIssue ? bmp.readPressure() / 100.0f : NAN;
     raw.humidity = dht.readHumidity();
     raw.rainRaw = analogRead(PIN_RAIN_ANALOG);
     Serial.printf("[SENSOR] T=%.2f H=%.2f P=%.2f AO=%d\n",

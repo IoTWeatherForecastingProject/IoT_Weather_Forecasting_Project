@@ -1,7 +1,8 @@
 /** Standalone UART diagnosis: DHT11 DATA -> NodeMCU D5/GPIO14.
- * No MQTT or fabricated pressure/rain samples; does not drive relay outputs.
+ * No MQTT or fabricated pressure/rain samples; holds configured relay LOW.
  */
 #include <Arduino.h>
+#include "board_wiring.h"
 #include <DHT.h>
 
 constexpr uint8_t DHT_PIN = 14;
@@ -10,6 +11,8 @@ DHT sensor(DHT_PIN, DHT11);
 uint32_t lastSample = 0;
 
 void setup() {
+    digitalWrite(ESP8266_RELAY_GPIO, LOW);
+    pinMode(ESP8266_RELAY_GPIO, OUTPUT);
     Serial.begin(115200);
     sensor.begin();
     Serial.println("DHT11_CHECK: DATA=D5/GPIO14, power=3V3, serial=115200");

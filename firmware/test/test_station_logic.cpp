@@ -1,6 +1,10 @@
 #include <assert.h>
 #include <stdio.h>
 #include "station_logic.h"
+#include "bmp_quality.h"
+#include "bmp280_sample.h"
+#include "rain_relay.h"
+#include "forecast_buzzer.h"
 
 station::Reading reading(float temperature, int rain = 900) {
     station::Reading result;
@@ -97,6 +101,70 @@ void testMillisWraparound() {
     assert(!alert.active());
 }
 
+void testBmpUnmeasuredRegression() {
+    // Observed reset registers compensated into plausible-looking 23.36 C/680.21 hPa.
+    station::Reading resetValue = reading(23.36f);
+    resetValue.pressure = 680.21f;
+    assert(resetValue.valid());
+    assert(station::bmpRawIssue(true, 0x80000, 0x80000, 0x00));
+    assert(station::bmpRawIssue(true, 0x80000, 415148, 0x57));
+    assert(station::bmpRawIssue(true, 519888, 0x80000, 0x57));
+    assert(station::bmpRawIssue(true, 0, 415148, 0x57));
+    assert(station::bmpRawIssue(false, 519888, 415148, 0x57));
+    // Completed forced measurements return to sleep with oversampling still enabled.
+    assert(!station::bmpRawIssue(true, 519888, 415148, 0x24));
+    assert(!station::bmpRawIssue(true, 519888, 415148, 0x57));
+}
+
+void testBmpCompensationFromCapturedSample() {
+    // Calibration and paired ADC channels from the replacement module.
+    const uint8_t calibration[] = {
+        0x9B, 0x6E, 0x3C, 0x66, 0x32, 0x00, 0x96, 0x8F,
+        0xEA, 0xD5, 0xD0, 0x0B, 0xFE, 0x1E, 0x98, 0xFF,
+        0xF9, 0xFF, 0x8C, 0x3C, 0xF8, 0xC6, 0x70, 0x17
+    };
+    float pressure = 0;
+    assert(station::compensateBmp280(calibration, 552832, 332509, pressure));
+    assert(fabs(pressure - 1011.32f) < 0.05f);
+    assert(!station::compensateBmp280(calibration, 0, 332509, pressure));
+}
+
+void testRainRelayPulseAndRearm() {
+    station::RainRelay relay;
+    assert(!relay.update(true, 0));
+    assert(!relay.update(true, 1000)); // A wet probe at boot is not a new transition.
+    assert(!relay.update(false, 2000));
+    assert(!relay.update(false, 3000));
+    assert(!relay.update(true, 3100));
+    assert(!relay.update(true, 3399));
+    assert(relay.update(true, 3400));
+    assert(relay.update(true, 6399));
+    assert(!relay.update(true, 6400));
+    assert(!relay.update(true, 10000));
+    assert(!relay.update(false, 10100));
+    assert(!relay.update(true, 10500)); // A brief dry glitch cannot rearm.
+    assert(!relay.update(true, 10800));
+    assert(!relay.update(false, 11000));
+    assert(!relay.update(false, 12000));
+    assert(!relay.update(true, 12100));
+    assert(relay.update(true, 12400));
+}
+
+void testForecastBuzzerTimingAndCancellation() {
+    station::ForecastBuzzer buzzer;
+    const uint32_t start = UINT32_MAX - 100;
+    assert(buzzer.start(start));
+    for (uint32_t elapsed = 0; elapsed < 1250; ++elapsed) {
+        assert(buzzer.active(start + elapsed));
+        assert(buzzer.buzzerOn(start + elapsed) == (elapsed / 250 % 2 == 0));
+    }
+    assert(!buzzer.buzzerOn(start + 1250));
+    assert(!buzzer.start(start + 179999));
+    assert(buzzer.start(start + 180000));
+    buzzer.cancel();
+    assert(!buzzer.buzzerOn(start + 180000));
+}
+
 int main() {
     testMovingAverage();
     testInvalidSampleAndRecovery();
@@ -105,5 +173,9 @@ int main() {
     testAlertTimingAndDuplicates();
     testDisabledActions();
     testMillisWraparound();
-    puts("7 station logic tests passed");
+    testBmpUnmeasuredRegression();
+    testBmpCompensationFromCapturedSample();
+    testRainRelayPulseAndRearm();
+    testForecastBuzzerTimingAndCancellation();
+    puts("11 station logic tests passed");
 }

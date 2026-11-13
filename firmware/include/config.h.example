@@ -1,5 +1,6 @@
 #ifndef WEATHER_STATION_CONFIG_H
 #define WEATHER_STATION_CONFIG_H
+#include "board_wiring.h"
 
 // ==============================================================================
 // CẤU HÌNH THÔNG SỐ TRẠM ĐO IOT (MẪU)
@@ -51,7 +52,7 @@
   #define PIN_I2C_SCL           5   // D1
   #define PIN_RAIN_ANALOG       A0  // A0
   #define PIN_DHT               14  // D5
-  #define PIN_BUZZER            12  // D6 -> relay IN; buzzer uses relay COM/NO
+  #define PIN_BUZZER            ESP8266_RELAY_GPIO  // D0 -> relay IN; buzzer uses COM/NO
   #define PIN_STATUS_LED        13  // D7
 #endif
 
