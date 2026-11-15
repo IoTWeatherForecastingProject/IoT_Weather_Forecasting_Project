@@ -482,9 +482,11 @@ Khi TV2 chưa xuất xưởng model hoặc môi trường test thiếu thư vi�
 - API kiểm tra $0.0 \le \text{threshold} \le 1.0$, lưu vào DB và cập nhật biến trong cache bộ nhớ để giảm tải truy vấn DB ở các lần dự báo tiếp theo.
 
 #### 5. Checklist nghiệm thu Stage 4
-- [ ] Endpoint `/api/weather/forecast` trả về đúng định dạng JSON 3 mốc thời gian (+10m, +30m, +60m).
-- [ ] Cơ chế Fallback Heuristic hoạt động trơn tru khi không tìm thấy `ai_engine`.
-- [ ] Cập nhật ngưỡng qua `/api/weather/alerts/threshold` thành công và ghi nhận vào bảng `system_config`.
+- [x] Endpoint `/api/weather/forecast` trả về đúng định dạng JSON 3 mốc thời gian (+10m, +30m, +60m).
+- [x] Cơ chế Fallback Heuristic hoạt động trơn tru khi không tìm thấy `ai_engine`.
+- [x] Cập nhật ngưỡng qua `/api/weather/alerts/threshold` thành công và ghi nhận vào bảng `system_config`.
+
+> Kiểm chứng cục bộ ngày 27/10/2026: 40 bài backend đạt, gồm 24 bài hợp đồng BE-05. API lấy cửa sổ 76 phút của một trạm, truyền cùng ngưỡng vào inference/fallback/AlertService, giữ `rain_source` và metadata lịch sử, trả 404 khi không có mẫu gần đây. Live verification đã nhận 216 mẫu (~17,92 phút) từ trạm mô phỏng và WebSocket hoạt động; không thiếu mẫu sau restart. Chờ weights/dữ liệu đủ lịch sử để nghiệm thu model thật, và chờ review/merge theo DoD. Bằng chứng: `personal/tv1/data_runs/20261027_1720/be05_verification.json`.
 
 ---
 
@@ -577,10 +579,12 @@ Payload JSON được gửi xuống topic `weather/station01/alert`:
 Mọi lần kích hoạt đều được lưu vào CSDL: `device_id`, `rain_probability`, `threshold`, `mqtt_sent`, `telegram_sent`, `notes`.
 
 #### 5. Checklist nghiệm thu Stage 5
-- [ ] Khi xác suất mưa $\ge 70\%$, trạm giả lập nhận được message trên topic `weather/station01/alert`.
+- [x] Khi xác suất mưa $\ge 70\%$, subscriber giả lập nhận được message trên đúng topic `weather/<device_id>/alert` (live test dùng `sim_tv1_20261027_1720`; template `station01` được kiểm tra bằng unit test).
 - [ ] Tin nhắn Telegram được gửi về điện thoại đúng mẫu Markdown (khi cấu hình token).
-- [ ] Cơ chế Cooldown hoạt động chuẩn xác: Không gửi liên tục nếu gọi `/forecast` dồn dập.
-- [ ] Bảng `alert_logs` có bản ghi tương ứng.
+- [x] Cơ chế Cooldown hoạt động chuẩn xác: Không gửi liên tục nếu gọi `/forecast` dồn dập.
+- [x] Bảng `alert_logs` có bản ghi tương ứng.
+
+> BE-06 kiểm chứng cục bộ ngày 27/10/2026: 72 bài backend đạt; tác vụ nền tự phát lệnh trước khi gọi forecast, subscriber nhận đúng topic trạm mô phỏng, 8 lần gọi forecast và thêm một chu kỳ nền vẫn chỉ có một lệnh trong cooldown. PUBACK và log DB đã xác nhận. Đối chiếu CSV/DB sau restart: không thiếu/trùng mẫu. Telegram chỉ được test bằng mock, chưa gửi thật; còi/relay trên board và review/merge vẫn chờ nghiệm thu. Bằng chứng: `personal/tv1/data_runs/20261027_1720/be06_verification.json`.
 
 ---
 
