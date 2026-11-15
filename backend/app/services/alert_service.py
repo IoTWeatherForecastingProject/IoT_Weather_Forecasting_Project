@@ -1,7 +1,11 @@
 import json
 import logging
+import math
+import threading
+import time
 from datetime import datetime, timezone
 import httpx
+import paho.mqtt.client as mqtt
 from app.config import settings
 from app.db.session import get_db_context
 from app.db.models import AlertLog
@@ -10,8 +14,15 @@ logger = logging.getLogger(__name__)
 
 
 class AlertService:
-    @staticmethod
+    # One uvicorn process: serialize each device across API and monitor threads.
+    # Channel-specific cooldowns let a failed channel retry without spamming the other.
+    _lock = threading.Lock()
+    _in_flight: set[str] = set()
+    _last_sent: dict[tuple[str, str], float] = {}
+
+    @classmethod
     def evaluate_and_trigger(
+        cls,
         device_id: str,
         rain_probability: float,
         horizon_minutes: int,
@@ -22,57 +33,88 @@ class AlertService:
         if threshold is None:
             threshold = settings.RAIN_ALERT_THRESHOLD
 
-        if rain_probability < threshold:
+        if (not math.isfinite(rain_probability) or not math.isfinite(threshold)
+                or not 0 <= rain_probability <= 1 or not 0 <= threshold <= 1
+                or rain_probability < threshold):
+            return False
+        if not device_id or any(char in device_id for char in ("/", "+", "#", "\x00")):
+            logger.error("[ALERT ENGINE] Device ID khong hop le cho MQTT topic")
             return False
 
-        logger.warning(
-            "[ALERT ENGINE] Xac suat mua %.2f%% vuot nguong %.2f%% tai moc +%dm! Kich hoat phan hoi 2 chieu.",
-            rain_probability * 100, threshold * 100, horizon_minutes
-        )
+        telegram_enabled = bool(settings.ENABLE_TELEGRAM_NOTIFICATIONS
+                                and settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID)
+        now = time.monotonic()
+        with cls._lock:
+            if device_id in cls._in_flight:
+                return False
+            mqtt_due = now - cls._last_sent.get((device_id, "mqtt"), -math.inf) >= settings.ALERT_COOLDOWN_SECONDS
+            telegram_due = telegram_enabled and (
+                now - cls._last_sent.get((device_id, "telegram"), -math.inf) >= settings.ALERT_COOLDOWN_SECONDS
+            )
+            if not mqtt_due and not telegram_due:
+                return False
+            cls._in_flight.add(device_id)
 
-        mqtt_sent = False
-        telegram_sent = False
+        try:
+            mqtt_sent = False
+            telegram_sent = False
+            mqtt_status = "cooldown" if not mqtt_due else "unavailable"
+            telegram_status = "disabled" if not telegram_enabled else "cooldown"
+            if mqtt_due and mqtt_client is not None and mqtt_client.is_connected():
+                mqtt_sent = cls._publish_alert(mqtt_client, device_id, rain_probability, horizon_minutes)
+                mqtt_status = "acknowledged" if mqtt_sent else "failed"
+            if telegram_due:
+                telegram_sent = cls._send_telegram_alert(device_id, rain_probability, horizon_minutes)
+                telegram_status = "sent" if telegram_sent else "failed"
 
-        # 1. Bắn lệnh MQTT xuống trạm IoT
-        if mqtt_client and mqtt_client.is_connected():
-            alert_payload = {
-                "type": "rain_warning",
-                "device_id": device_id,
-                "probability": round(rain_probability, 4),
-                "forecast_minutes": horizon_minutes,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "action": {
-                    "buzzer": True,
-                    "led_blink": True,
-                    "oled_message": f"MUA (+{horizon_minutes}m: {int(rain_probability * 100)}%)"
-                }
+            with cls._lock:
+                if mqtt_sent:
+                    cls._last_sent[(device_id, "mqtt")] = time.monotonic()
+                if telegram_sent:
+                    cls._last_sent[(device_id, "telegram")] = time.monotonic()
+            cls._log_alert_to_db(
+                device_id=device_id, rain_prob=rain_probability, threshold=threshold,
+                mqtt_sent=mqtt_sent, telegram_sent=telegram_sent,
+                notes=f"+{horizon_minutes}m; mqtt={mqtt_status}; telegram={telegram_status}",
+            )
+            return mqtt_sent or telegram_sent
+        finally:
+            with cls._lock:
+                cls._in_flight.discard(device_id)
+
+    @staticmethod
+    def _publish_alert(mqtt_client, device_id, rain_probability, horizon_minutes) -> bool:
+        # Recognize the old default in existing .env files while routing every station correctly.
+        template = settings.MQTT_ALERT_TOPIC
+        if template == "weather/station01/alert":
+            template = "weather/{device_id}/alert"
+        topic = template.replace("{device_id}", device_id)
+        alert_payload = {
+            "type": "rain_warning",
+            "device_id": device_id,
+            "probability": round(rain_probability, 4),
+            "forecast_minutes": horizon_minutes,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "action": {
+                "buzzer": True,
+                "led_blink": True,
+                "oled_message": f"MUA (+{horizon_minutes}m: {int(rain_probability * 100)}%)"
             }
-            try:
-                mqtt_client.publish(
-                    settings.MQTT_ALERT_TOPIC,
-                    json.dumps(alert_payload),
-                    qos=1
-                )
-                mqtt_sent = True
-                logger.info("[ALERT ENGINE] Da publish lenh canh bao toi MQTT topic: %s", settings.MQTT_ALERT_TOPIC)
-            except Exception as e:
-                logger.error("[ALERT ENGINE] Loi khi publish MQTT alert: %s", e)
-
-        # 2. Gửi thông báo Telegram Bot
-        if settings.ENABLE_TELEGRAM_NOTIFICATIONS and settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID:
-            telegram_sent = AlertService._send_telegram_alert(device_id, rain_probability, horizon_minutes)
-
-        # 3. Ghi log cảnh báo vào CSDL
-        AlertService._log_alert_to_db(
-            device_id=device_id,
-            rain_prob=rain_probability,
-            threshold=threshold,
-            mqtt_sent=mqtt_sent,
-            telegram_sent=telegram_sent,
-            notes=f"Kich hoat tai moc +{horizon_minutes} phut"
-        )
-
-        return True
+        }
+        try:
+            info = mqtt_client.publish(topic, json.dumps(alert_payload), qos=1, retain=False)
+            if info.rc != mqtt.MQTT_ERR_SUCCESS:
+                logger.warning("[ALERT ENGINE] Publish bi tu choi: rc=%s", info.rc)
+                return False
+            info.wait_for_publish(timeout=settings.ALERT_MQTT_ACK_TIMEOUT_SECONDS)
+            if not info.is_published():
+                logger.warning("[ALERT ENGINE] Het thoi gian cho PUBACK: %s", topic)
+                return False
+            logger.info("[ALERT ENGINE] Broker da ACK canh bao: %s", topic)
+            return True
+        except Exception as exc:
+            logger.error("[ALERT ENGINE] Publish that bai: %s", type(exc).__name__)
+            return False
 
     @staticmethod
     def _send_telegram_alert(device_id: str, rain_prob: float, horizon_minutes: int) -> bool:
@@ -83,7 +125,7 @@ class AlertService:
             f"📍 *Trạm đo:* `{device_id}`\n"
             f"🌧 *Xác suất mưa:* `{rain_prob * 100:.1f}%`\n"
             f"⏱ *Khung thời gian:* `+{horizon_minutes} phút tới`\n"
-            f"🔔 *Hành động:* Trạm IoT đã tự động kích hoạt còi và đèn cảnh báo ngoài trời."
+            f"🔔 Hãy kiểm tra thời tiết tại trạm. Trạng thái gửi lệnh MQTT được ghi trong nhật ký hệ thống."
         )
         payload = {
             "chat_id": settings.TELEGRAM_CHAT_ID,
@@ -93,9 +135,10 @@ class AlertService:
         try:
             with httpx.Client(timeout=5.0) as client:
                 res = client.post(url, json=payload)
-                return res.status_code == 200
+                return res.status_code == 200 and res.json().get("ok") is True
         except Exception as e:
-            logger.error("[ALERT ENGINE] Loi gui tin nhan Telegram: %s", e)
+            # HTTP exceptions may contain the bot token in their URL.
+            logger.error("[ALERT ENGINE] Loi gui tin nhan Telegram: %s", type(e).__name__)
             return False
 
     @staticmethod

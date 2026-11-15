@@ -1,7 +1,8 @@
 import json
 import logging
-from datetime import datetime, timezone
-from decimal import Decimal
+import hashlib
+from collections import OrderedDict
+from sqlalchemy.dialects.postgresql import insert
 from typing import Callable, Optional, Dict, Any
 
 import paho.mqtt.client as mqtt
@@ -9,6 +10,7 @@ import paho.mqtt.client as mqtt
 from app.config import settings
 from app.db.session import get_db_context
 from app.db.models import WeatherMeasurement
+from app.ingestion.validation import parse_telemetry
 
 logger = logging.getLogger("weather_backend.mqtt_worker")
 
@@ -54,6 +56,7 @@ class MQTTIngestionWorker:
         self.client.on_disconnect = self._on_disconnect
 
         self._is_running = False
+        self._recent_packets = OrderedDict()
 
     @property
     def is_connected(self) -> bool:
@@ -81,132 +84,48 @@ class MQTTIngestionWorker:
 
     @staticmethod
     def _parse_and_validate_payload(payload_bytes: bytes) -> Optional[Dict[str, Any]]:
-        """
-        Khử trùng và kiểm tra tính hợp lệ dữ liệu cảm biến:
-        - Bắt lỗi JSON parsing
-        - Kiểm tra các ngưỡng vật lý (-40°C đến 85°C, 0-100% độ ẩm, 800-1200 hPa)
-        - Chuẩn hóa Timestamp UTC
-        """
         try:
-            payload_str = payload_bytes.decode("utf-8")
-            data = json.loads(payload_str)
-        except Exception as e:
-            logger.error("[MQTT WORKER] Payload khong phai JSON hop le: %s", e)
+            data = json.loads(payload_bytes.decode("utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("payload_must_be_object")
+            return parse_telemetry(data)
+        except (ValueError, TypeError, UnicodeError, OverflowError) as exc:
+            logger.warning("[MQTT WORKER] Bo mau khong hop le: %s", exc)
             return None
-
-        if not isinstance(data, dict):
-            logger.error("[MQTT WORKER] Payload khong phai dictionary: %s", type(data))
-            return None
-
-        # 1. Device ID
-        device_id = str(data.get("device_id", "station01")).strip()[:50]
-        if not device_id:
-            device_id = "station01"
-
-        # 2. Temperature (-40 đến 85 °C)
-        try:
-            temp = float(data.get("temperature", 0.0))
-            if temp < -40.0 or temp > 85.0:
-                logger.warning("[MQTT WORKER] Nhiet do bat thuong: %.2f°C cho trạm %s", temp, device_id)
-        except (ValueError, TypeError):
-            logger.warning("[MQTT WORKER] Loi gia tri nhiet do, fallback ve 0.0: %s", data.get("temperature"))
-            temp = 0.0
-
-        # 3. Humidity (0 đến 100%)
-        try:
-            hum = float(data.get("humidity", 0.0))
-            if hum < 0.0 or hum > 100.0:
-                logger.warning("[MQTT WORKER] Do am bat thuong: %.2f%% cho trạm %s (clamp ve 0-100)", hum, device_id)
-                hum = max(0.0, min(100.0, hum))
-        except (ValueError, TypeError):
-            hum = 0.0
-
-        # 4. Pressure (800 đến 1200 hPa)
-        try:
-            press = float(data.get("pressure", 1013.25))
-            if press < 800.0 or press > 1200.0:
-                logger.warning("[MQTT WORKER] Ap suat bat thuong: %.2f hPa cho trạm %s", press, device_id)
-        except (ValueError, TypeError):
-            press = 1013.25
-
-        # 5. Rain values
-        rain_raw = data.get("rain_raw")
-        if rain_raw is not None:
-            try:
-                rain_raw = int(rain_raw)
-            except (ValueError, TypeError):
-                rain_raw = None
-
-        rain_detected = 1 if int(data.get("rain_detected", 0)) else 0
-
-        # 6. Timestamp chuẩn hóa UTC
-        record_time = None
-        raw_ts = data.get("timestamp")
-        if raw_ts:
-            try:
-                parsed_dt = datetime.fromisoformat(str(raw_ts))
-                if parsed_dt.tzinfo is None:
-                    record_time = parsed_dt.replace(tzinfo=timezone.utc)
-                else:
-                    record_time = parsed_dt.astimezone(timezone.utc)
-            except Exception:
-                record_time = None
-
-        if record_time is None:
-            record_time = datetime.now(timezone.utc)
-
-        return {
-            "device_id": device_id,
-            "timestamp": record_time,
-            "temperature": round(temp, 2),
-            "humidity": round(hum, 2),
-            "pressure": round(press, 2),
-            "rain_raw": rain_raw,
-            "rain_detected": rain_detected
-        }
 
     def _on_message(self, client, userdata, msg):
+        clean_data = self._parse_and_validate_payload(msg.payload)
+        if clean_data is None:
+            return
+        expected = f"{settings.MQTT_TOPIC_PREFIX}/{clean_data['device_id']}/data"
+        if msg.topic != expected:
+            logger.warning("[MQTT WORKER] Topic khong khop device_id")
+            return
+        packet = (msg.topic, getattr(msg, "mid", None), hashlib.sha256(msg.payload).digest())
+        if getattr(msg, "dup", False) and packet in self._recent_packets:
+            return
         try:
-            clean_data = self._parse_and_validate_payload(msg.payload)
-            if not clean_data:
+            with get_db_context() as db:
+                statement = insert(WeatherMeasurement).values(**clean_data).on_conflict_do_nothing(
+                    index_elements=["message_key"]
+                ).returning(WeatherMeasurement.id)
+                inserted = db.execute(statement).scalar_one_or_none()
+            if inserted is None:
                 return
-
-            logger.debug("[MQTT WORKER] Nhan packet tu [%s]: %s", msg.topic, clean_data)
-
-            # Lưu vào PostgreSQL an toàn theo luồng (Thread-safe context manager)
+        except Exception:
+            logger.exception("[MQTT WORKER] Khong luu duoc mau; khong phat WebSocket")
+            return
+        self._recent_packets[packet] = None
+        self._recent_packets.move_to_end(packet)
+        if len(self._recent_packets) > 1024:
+            self._recent_packets.popitem(last=False)
+        if self.broadcast_callback:
+            payload = {key: value for key, value in clean_data.items() if key != "message_key"}
+            payload["timestamp"] = payload["timestamp"].isoformat()
             try:
-                with get_db_context() as db:
-                    record = WeatherMeasurement(
-                        device_id=clean_data["device_id"],
-                        timestamp=clean_data["timestamp"],
-                        temperature=Decimal(str(clean_data["temperature"])),
-                        humidity=Decimal(str(clean_data["humidity"])),
-                        pressure=Decimal(str(clean_data["pressure"])),
-                        rain_raw=clean_data["rain_raw"],
-                        rain_detected=clean_data["rain_detected"]
-                    )
-                    db.add(record)
-            except Exception as dbe:
-                logger.error("[MQTT WORKER] Loi ghi CSDL cho packet tu '%s': %s", clean_data["device_id"], dbe)
-
-            # Bắn broadcast tới WebSocket client
-            if self.broadcast_callback:
-                try:
-                    broadcast_payload = {
-                        "device_id": clean_data["device_id"],
-                        "timestamp": clean_data["timestamp"].isoformat(),
-                        "temperature": clean_data["temperature"],
-                        "humidity": clean_data["humidity"],
-                        "pressure": clean_data["pressure"],
-                        "rain_raw": clean_data["rain_raw"],
-                        "rain_detected": clean_data["rain_detected"]
-                    }
-                    self.broadcast_callback(broadcast_payload)
-                except Exception as bce:
-                    logger.warning("[MQTT WORKER] Callback broadcast sinh loi: %s", bce)
-
-        except Exception as e:
-            logger.error("[MQTT WORKER] Ngoai le khong mong muon khi xu ly message: %s", e)
+                self.broadcast_callback(payload)
+            except Exception:
+                logger.exception("[MQTT WORKER] Callback WebSocket that bai")
 
     def start(self):
         try:

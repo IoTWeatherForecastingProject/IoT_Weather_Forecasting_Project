@@ -1,697 +1,280 @@
-"""Kiểm thử API Dashboard với PostgreSQL thật và dữ liệu tổng hợp độc lập."""
-
-import json
-import subprocess
-import sys
-from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from itertools import count
 from pathlib import Path
-from unittest.mock import MagicMock
-from uuid import uuid4
+import re
+from types import SimpleNamespace
+from unittest.mock import Mock
 
-import numpy as np
-import pandas as pd
-import pytest
-from app.api import endpoints
-from app.config import settings
-from app.db.models import ReferenceWeather, SystemConfig, WeatherMeasurement
-from app.db.session import get_db, get_db_context
-from app.main import app
-from app.services import analytics_client, forecast_client
 from fastapi.testclient import TestClient
-from sqlalchemy import text
-from sqlalchemy.exc import ProgrammingError
+import pytest
+import pandas as pd
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
-client = TestClient(app)
-API = "/api/weather"
+from app.config import settings
+from app.db.models import ReferenceWeather, WeatherMeasurement, SystemConfig
+from app.db.session import Base, get_db
+from app.main import app
+from app.services import analytics
 
-
-@pytest.fixture
-def dashboard_data() -> Iterator[tuple[str, str, str]]:
-    """Cấp mã test riêng và luôn dọn đúng các bản ghi thuộc test đó."""
-    suffix = uuid4().hex[:10]
-    device_id = f"test_dash_{suffix}"
-    source = f"test_dash_ref_{suffix}"
-    other_source = f"test_dash_alt_{suffix}"
-    try:
-        yield device_id, source, other_source
-    finally:
-        with get_db_context() as db:
-            db.query(WeatherMeasurement).filter(
-                WeatherMeasurement.device_id == device_id
-            ).delete()
-            db.query(ReferenceWeather).filter(
-                ReferenceWeather.source.in_([source, other_source])
-            ).delete()
+NOW = datetime(2026, 10, 27, 12, tzinfo=timezone.utc)
 
 
 @pytest.fixture
-def preserved_threshold() -> Iterator[None]:
-    """Sao lưu và phục hồi nguyên giá trị cùng updated_at dù test thất bại."""
-    key = "rain_alert_threshold"
-    with get_db_context() as db:
-        config = db.get(SystemConfig, key)
-        backup = (
-            {
-                "config_key": key,
-                "config_value": config.config_value,
-                "updated_at": config.updated_at,
-            }
-            if config is not None
-            else None
-        )
-    try:
-        with get_db_context() as db:
-            db.query(SystemConfig).filter(SystemConfig.config_key == key).delete()
-        yield
-    finally:
-        with get_db_context() as db:
-            db.query(SystemConfig).filter(SystemConfig.config_key == key).delete()
-            if backup is not None:
-                db.add(SystemConfig(**backup))
+def context(monkeypatch):
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine, tables=[WeatherMeasurement.__table__, ReferenceWeather.__table__, SystemConfig.__table__])
+    db = Session(engine)
+    ids = count(1)
+
+    def override():
+        yield db
+
+    def add(age_seconds=0, device_id="target", **values):
+        row = WeatherMeasurement(**dict(
+            {"id": next(ids), "device_id": device_id, "timestamp": NOW - timedelta(seconds=age_seconds),
+             "temperature": 32, "humidity": 75, "pressure": 1008, "rain_detected": 0, "rain_raw": 750}, **values))
+        db.add(row)
+        return row
+
+    def ref(age_seconds=60, source="open-meteo", **values):
+        row = ReferenceWeather(**dict(
+            {"id": next(ids), "source": source, "timestamp": NOW - timedelta(seconds=age_seconds),
+             "lat": 10.85, "lon": 106.78, "temperature": 30, "humidity": 70, "pressure": 1000}, **values))
+        db.add(row)
+
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = NOW
+    monkeypatch.setattr(analytics, "datetime", clock)
+    # Stub only the hand-off interface; TV3 algorithms are not tested/imported here.
+    detector = SimpleNamespace(analyze=Mock(return_value={'status':'OK', 'anomalies':[]}))
+    bias = Mock(return_value=({'reason':'no_overlap', 'metrics':{}, 'meta':{'notes':[]}}, pd.DataFrame()))
+    loader = Mock(side_effect=lambda module, symbol: detector if symbol == 'SensorAnomalyDetector' else bias)
+    monkeypatch.setattr(analytics, 'load_symbol', loader)
+    monkeypatch.setattr(settings, 'ANALYTICS_ENGINE_MODE', 'auto')
+    monkeypatch.setitem(app.dependency_overrides, get_db, override)
+    yield SimpleNamespace(db=db, add=add, ref=ref, client=TestClient(app), detector=detector, bias=bias, loader=loader)
+    db.close()
+    engine.dispose()
 
 
-def _add_iot(
-    device_id: str,
-    timestamps: list[datetime],
-    temperature: float = 31.5,
-    vary: bool = False,
-) -> None:
-    """Chèn dữ liệu tổng hợp, có thể dao động nhẹ để tránh kẹt giả."""
-    with get_db_context() as db:
-        for index, timestamp in enumerate(timestamps):
-            delta = index * 0.01 if vary else 0
-            db.add(
-                WeatherMeasurement(
-                    device_id=device_id,
-                    timestamp=timestamp,
-                    temperature=temperature + delta,
-                    humidity=75 + delta,
-                    pressure=1008 + delta,
-                    rain_raw=2800,
-                    rain_detected=0,
-                )
-            )
-
-
-def _add_reference(
-    source: str,
-    timestamp: datetime,
-    temperature: float | None = 30.0,
-    humidity: float | None = 75.0,
-    pressure: float | None = 1008.0,
-) -> None:
-    """Chèn một mốc tham chiếu riêng cho test, giữ nguyên các biến NULL."""
-    with get_db_context() as db:
-        db.add(
-            ReferenceWeather(
-                source=source,
-                timestamp=timestamp,
-                lat=10.8,
-                lon=106.7,
-                temperature=temperature,
-                humidity=humidity,
-                pressure=pressure,
-            )
-        )
-
-
-def test_threshold_default_then_post(preserved_threshold: None) -> None:
-    """Đọc mặc định khi thiếu cấu hình và đọc lại giá trị được POST lưu."""
-    response = client.get(f"{API}/alerts/threshold")
-    assert response.status_code == 200
-    assert response.json() == {
-        "threshold": settings.RAIN_ALERT_THRESHOLD,
-        "source": "default",
-        "updated_at": None,
-    }
-    saved = client.post(f"{API}/alerts/threshold", json={"threshold": 0.6})
-    assert saved.status_code == 200
-    response = client.get(f"{API}/alerts/threshold")
-    assert response.status_code == 200
-    assert response.json()["threshold"] == 0.6
-    assert response.json()["source"] == "db"
-    assert response.json()["updated_at"] is not None
+def test_threshold_read_fallback_update_and_read_back(context, monkeypatch):
+    monkeypatch.setattr(settings, "RAIN_ALERT_THRESHOLD", 0.72)
+    assert context.client.get("/api/weather/alerts/threshold").json() == {"threshold": 0.72, "source": "default", "updated_at": None}
+    assert context.client.post("/api/weather/alerts/threshold", json={"threshold": 0.65}).status_code == 200
+    saved = context.client.get("/api/weather/alerts/threshold").json()
+    assert saved["threshold"] == 0.65 and saved["source"] == "db" and saved["updated_at"]
 
 
 @pytest.mark.parametrize("value", ["invalid", "NaN", "Infinity", "1.5", "-0.1"])
-def test_threshold_invalid_uses_default(
-    preserved_threshold: None, value: str, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Cấu hình không hợp lệ dùng mặc định và ghi cảnh báo không dấu."""
-    with get_db_context() as db:
-        db.add(SystemConfig(config_key="rain_alert_threshold", config_value=value))
-    response = client.get(f"{API}/alerts/threshold")
-    assert response.status_code == 200
-    assert response.json()["source"] == "default"
-    assert response.json()["threshold"] == settings.RAIN_ALERT_THRESHOLD
-    assert response.json()["updated_at"] is None
-    assert "Invalid rain_alert_threshold" in caplog.text
-
-
-def test_threshold_default_from_settings(
-    preserved_threshold: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """DB chưa có ngưỡng thì GET trả đúng RAIN_ALERT_THRESHOLD đang cấu hình."""
+def test_invalid_threshold_uses_shared_default(context, monkeypatch, value):
+    from app.services.rain_threshold import resolve_rain_threshold
     monkeypatch.setattr(settings, "RAIN_ALERT_THRESHOLD", 0.85)
-    response = client.get(f"{API}/alerts/threshold")
+    context.db.add(SystemConfig(config_key="rain_alert_threshold", config_value=value))
+    context.db.commit()
+    response = context.client.get("/api/weather/alerts/threshold")
     assert response.status_code == 200
-    assert response.json()["threshold"] == 0.85
-    assert response.json()["source"] == "default"
+    assert response.json() == {"threshold": 0.85, "source": "default", "updated_at": None}
+    assert resolve_rain_threshold(context.db) == (0.85, "default", None)
 
 
-def test_sensor_health_no_data(dashboard_data: tuple[str, str, str]) -> None:
-    """Không có dữ liệu trả UNKNOWN cùng các trường mặc định đầy đủ."""
-    device_id, _, _ = dashboard_data
-    response = client.get(f"{API}/sensor-health", params={"device_id": device_id})
+def test_no_duplicate_api_handlers():
+    from app.api.endpoints import router
+    from collections import Counter
+    counts = Counter((route.path, tuple(sorted(route.methods))) for route in router.routes)
+    assert all(count == 1 for count in counts.values())
+
+
+def test_health_empty_is_unknown(context):
+    response = context.client.get("/api/weather/sensor-health", params={"device_id": "target"})
     assert response.status_code == 200
-    assert response.json() == {
-        "device_id": device_id,
-        "status": "UNKNOWN",
-        "checked_at": None,
-        "window_minutes": 360,
-        "n_records": 0,
-        "anomalies": [],
-        "frozen_sensors": [],
-        "rain_drift": False,
-        "reason": "no_data",
-    }
+    assert response.json()["status"] == "UNKNOWN"
+    assert response.json()["reason"] == "no_data"
+    assert response.json()["anomalies"] == []
 
 
-def test_sensor_health_normal(dashboard_data: tuple[str, str, str]) -> None:
-    """Ba mươi phút dữ liệu tổng hợp dao động bình thường trả OK."""
-    device_id, _, _ = dashboard_data
-    now = datetime.now(UTC) - timedelta(seconds=1)
-    timestamps = [now - timedelta(minutes=index) for index in range(30, -1, -1)]
-    _add_iot(device_id, list(reversed(timestamps)), vary=True)
-    response = client.get(f"{API}/sensor-health", params={"device_id": device_id})
+def test_rain_history_groups_by_vietnam_date_and_preserves_gaps(context, monkeypatch):
+    from app.api import endpoints
+    from app.services import rain_history as service
+
+    # The two wet periods begin on opposite sides of midnight in Vietnam.
+    midnight = datetime(2026, 10, 26, 17, tzinfo=timezone.utc)
+    monkeypatch.setattr(endpoints, "rain_history", lambda db, device: service.rain_history(db, device, NOW))
+    for base, samples in [
+        (midnight, [(-15, 0, 29), (-10, 1, 30.2), (0, 1, 32), (5, 0, 31),
+                    (10, 1, 31.5), (60, 1, 33), (65, 0, 32)]),
+        (midnight - timedelta(days=7), [(10, 1, 20)]),
+    ]:
+        for seconds, wet, temperature in samples:
+            age = (NOW - (base + timedelta(seconds=seconds))).total_seconds()
+            context.add(age, rain_detected=wet, temperature=temperature)
+    context.add(device_id="other", rain_detected=1)
+    context.add(-1, rain_detected=1)
+    context.db.commit()
+
+    response = context.client.get("/api/weather/rain-history", params={"device_id": "target"})
     assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "OK"
-    assert data["n_records"] == 31
-    assert data["anomalies"] == []
-    assert datetime.fromisoformat(data["checked_at"]) == now
+    result = response.json()
+    assert result["has_readings"] is True
+    newer, older = result["days"]
+    assert (newer["date"], older["date"]) == ("2026-10-27", "2026-10-26")
+    assert [event["status"] for event in newer["events"]] == ["dry", "unknown_end"]
+    assert newer["events"][0]["confirmed_start"] is False
+    assert newer["events"][1]["dry_at"] is None
+    first = older["events"][0]
+    assert first["temperature"] == 30.2
+    assert first["confirmed_start"] is True
+    assert first["dry_at"].startswith("2026-10-26T17:00:05")
 
 
-def test_sensor_health_latest_fault(dashboard_data: tuple[str, str, str]) -> None:
-    """Nhiệt độ 120°C ở bản ghi mới nhất trả FAULT và giữ chi tiết value."""
-    device_id, _, _ = dashboard_data
-    now = datetime.now(UTC)
-    _add_iot(device_id, [now - timedelta(minutes=1)])
-    _add_iot(device_id, [now], temperature=120)
-    response = client.get(f"{API}/sensor-health", params={"device_id": device_id})
+def test_health_preserves_anomalies_and_filters_station_and_future(context):
+    context.add(humidity=125)
+    context.add(age_seconds=-10)
+    context.add(device_id="other")
+    context.detector.analyze.return_value = {'status':'FAULT', 'anomalies':[{'type':'OUT_OF_RANGE', 'sensor':'humidity', 'message':'test provider anomaly'}]}
+    result = context.client.get("/api/weather/sensor-health", params={"device_id": "target"}).json()
+    assert result["status"] == "FAULT"
+    assert any(a["type"] == "OUT_OF_RANGE" and a["sensor"] == "humidity" for a in result["anomalies"])
+    assert result["checked_at"].endswith("+00:00")
+    assert len(context.detector.analyze.call_args.args[0]) == 1
+
+
+def test_health_stale_is_unknown(context):
+    context.add(age_seconds=121)
+    result = context.client.get("/api/weather/sensor-health", params={"device_id": "target"}).json()
+    assert result["status"] == "UNKNOWN" and result["reason"] == "stale_data"
+
+
+def test_benchmark_empty_does_not_make_up_reference(context):
+    response = context.client.get("/api/weather/benchmark", params={"device_id": "target"})
     assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "FAULT"
-    assert any(
-        anomaly["type"] == "OUT_OF_RANGE"
-        and anomaly["sensor"] == "temperature"
-        and anomaly["value"] == 120
-        for anomaly in data["anomalies"]
-    )
-
-
-def test_sensor_health_ignores_future_records(
-    dashboard_data: tuple[str, str, str],
-) -> None:
-    """Bản ghi bình thường mang timestamp ngày mai không được che mất FAULT hiện tại."""
-    device_id, _, _ = dashboard_data
-    now = datetime.now(UTC)
-    _add_iot(device_id, [now - timedelta(minutes=1)])
-    _add_iot(device_id, [now], temperature=120)
-    tomorrow = now + timedelta(days=1)
-    _add_iot(
-        device_id,
-        [tomorrow + timedelta(minutes=offset) for offset in (0, 1, 2)],
-        vary=True,
-    )
-    response = client.get(f"{API}/sensor-health", params={"device_id": device_id})
-    called_at = datetime.now(UTC)
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "FAULT"
-    assert data["n_records"] == 2
-    assert any(
-        anomaly["type"] == "OUT_OF_RANGE" and anomaly["sensor"] == "temperature"
-        for anomaly in data["anomalies"]
-    )
-    assert datetime.fromisoformat(data["checked_at"]) <= called_at
-
-
-def test_sensor_health_time_window(dashboard_data: tuple[str, str, str]) -> None:
-    """Bỏ bản ghi ngoài cửa sổ bằng timestamp dù trạm có rất ít bản ghi."""
-    device_id, _, _ = dashboard_data
-    now = datetime.now(UTC)
-    _add_iot(device_id, [now - timedelta(minutes=31)], temperature=120)
-    _add_iot(device_id, [now - timedelta(minutes=1), now], vary=True)
-    response = client.get(
-        f"{API}/sensor-health",
-        params={
-            "device_id": device_id,
-            "window_minutes": 30,
-        },
-    )
-    assert response.status_code == 200
-    assert response.json()["n_records"] == 2
-    assert response.json()["status"] == "OK"
-
-
-@pytest.mark.parametrize(
-    "params",
-    [
-        {},
-        {"device_id": ""},
-        {"device_id": "test_dash_invalid", "window_minutes": 5},
-        {"device_id": "test_dash_invalid", "window_minutes": 1441},
-    ],
-)
-def test_sensor_health_validation(params: dict) -> None:
-    """Thiếu mã trạm hoặc cửa sổ ngoài giới hạn trả 422."""
-    assert client.get(f"{API}/sensor-health", params=params).status_code == 422
-
-
-def test_sensor_health_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Bộ phát hiện không import được trả lỗi 503 đúng contract."""
-    monkeypatch.setattr(analytics_client, "HAS_ANOMALY", False)
-    response = client.get(f"{API}/sensor-health", params={"device_id": "test_dash_off"})
-    assert response.status_code == 503
-    assert response.json()["detail"] == "anomaly detector unavailable"
-
-
-def test_sensor_health_json_types(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Giữ field phụ, đổi numpy/pandas, NaN và vô cực sang JSON thuần."""
-    result = {
-        "status": "WARNING",
-        "checked_at": pd.Timestamp("2026-10-16T00:00:00Z"),
-        "anomalies": [
-            {
-                "type": "CUSTOM",
-                "sensor": "temperature",
-                "message": "test",
-                "value": np.float64(1.5),
-                "samples": np.int64(3),
-                "details": [np.bool_(True), np.nan, np.inf, pd.NA, pd.NaT],
-            }
-        ],
-        "rain_drift": np.bool_(False),
-        "frozen_sensors": [],
-    }
-    monkeypatch.setattr(
-        analytics_client.SensorAnomalyDetector, "analyze", lambda frame: result
-    )
-    report = analytics_client.sensor_health([{"timestamp": datetime.now(UTC)}])
-    json.dumps(report, allow_nan=False)
-    assert report["anomalies"][0]["details"] == [True, None, None, None, None]
-    assert type(report["anomalies"][0]["samples"]) is int
-    assert type(report["rain_drift"]) is bool
-
-
-def test_benchmark_no_reference(dashboard_data: tuple[str, str, str]) -> None:
-    """Nguồn chưa có tham chiếu trả chuỗi rỗng và sai số null."""
-    device_id, source, _ = dashboard_data
-    response = client.get(
-        f"{API}/benchmark", params={"device_id": device_id, "source": source}
-    )
-    assert response.status_code == 200
-    assert response.json() == {
-        "device_id": device_id,
-        "source": source,
-        "hours": 24,
-        "reference": [],
-        "latest_bias": None,
-    }
-
-
-def test_benchmark_bias_and_inclusive_tolerance(
-    dashboard_data: tuple[str, str, str],
-) -> None:
-    """Ghép năm mẫu trong khoảng đóng ±5 phút và loại mẫu ngoài khoảng."""
-    device_id, source, _ = dashboard_data
-    now = datetime.now(UTC) - timedelta(minutes=6)
-    _add_reference(source, now)
-    _add_iot(
-        device_id, [now + timedelta(minutes=offset) for offset in (-5, -2, 0, 2, 5)]
-    )
-    _add_iot(device_id, [now - timedelta(minutes=6)], temperature=50)
-    response = client.get(
-        f"{API}/benchmark", params={"device_id": device_id, "source": source}
-    )
-    assert response.status_code == 200
-    bias = response.json()["latest_bias"]
-    assert bias["temp_bias_c"] == pytest.approx(1.5)
-    assert bias["hum_bias_percent"] == 0
-    assert bias["press_bias_hpa"] == 0
-    assert bias["n_iot"] == 5
-    assert datetime.fromisoformat(bias["reference_timestamp"]) == now
-
-
-def test_benchmark_ignores_future_reference(
-    dashboard_data: tuple[str, str, str],
-) -> None:
-    """Mốc tham chiếu tương lai bị loại; sai số tính ở mốc quá khứ gần nhất."""
-    device_id, source, _ = dashboard_data
-    past = datetime.now(UTC) - timedelta(minutes=10)
-    _add_reference(source, past)
-    _add_reference(source, past + timedelta(hours=2, minutes=10))
-    _add_iot(device_id, [past + timedelta(minutes=offset) for offset in (-1, 0, 1)])
-    response = client.get(
-        f"{API}/benchmark", params={"device_id": device_id, "source": source}
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert [datetime.fromisoformat(r["timestamp"]) for r in data["reference"]] == [
-        past
-    ]
-    assert datetime.fromisoformat(data["latest_bias"]["reference_timestamp"]) == past
-
-
-def test_benchmark_ignores_future_iot_samples(
-    dashboard_data: tuple[str, str, str],
-) -> None:
-    """Mẫu IoT tương lai không được bù số mẫu còn thiếu để tính sai số."""
-    device_id, source, _ = dashboard_data
-    base = datetime.now(UTC) - timedelta(seconds=30)
-    _add_reference(source, base)
-    _add_iot(device_id, [base])
-    _add_iot(
-        device_id,
-        [base + timedelta(minutes=m) for m in (1, 2, 3)],
-        temperature=50,
-    )
-    response = client.get(
-        f"{API}/benchmark", params={"device_id": device_id, "source": source}
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["latest_bias"] is None
-    assert [datetime.fromisoformat(r["timestamp"]) for r in data["reference"]] == [
-        base
-    ]
-
-
-def test_benchmark_bias_excludes_future_iot_samples(
-    dashboard_data: tuple[str, str, str],
-) -> None:
-    """Sai số chỉ dùng ba mẫu IoT hợp lệ và bỏ qua các mẫu tương lai."""
-    device_id, source, _ = dashboard_data
-    base = datetime.now(UTC) - timedelta(seconds=30)
-    _add_reference(source, base)
-    _add_iot(device_id, [base - timedelta(minutes=m) for m in (2, 1, 0)])
-    _add_iot(
-        device_id,
-        [base + timedelta(minutes=m) for m in (1, 2, 3)],
-        temperature=50,
-    )
-    response = client.get(
-        f"{API}/benchmark", params={"device_id": device_id, "source": source}
-    )
-    assert response.status_code == 200
-    bias = response.json()["latest_bias"]
-    assert bias["temp_bias_c"] == pytest.approx(1.5)
-    assert bias["n_iot"] == 3
-    assert datetime.fromisoformat(bias["reference_timestamp"]) == base
-
-
-def test_benchmark_two_samples(dashboard_data: tuple[str, str, str]) -> None:
-    """Hai mẫu không đủ ghép bất kỳ biến nào nên latest_bias là null."""
-    device_id, source, _ = dashboard_data
-    now = datetime.now(UTC)
-    _add_reference(source, now)
-    _add_iot(device_id, [now - timedelta(minutes=1), now])
-    response = client.get(
-        f"{API}/benchmark", params={"device_id": device_id, "source": source}
-    )
-    assert response.status_code == 200
+    assert response.json()["reference"] == []
     assert response.json()["latest_bias"] is None
 
 
-def test_latest_bias_minimum_per_variable() -> None:
-    """Biến chỉ có hai mẫu là None dù biến khác có đủ ba mẫu để ghép."""
-    now = datetime.now(UTC)
-    iot = [
-        {
-            "timestamp": now + timedelta(seconds=index),
-            "temperature": 31.5 if index < 2 else None,
-            "humidity": 76,
-            "pressure": 1007,
-        }
-        for index in range(3)
-    ]
-    reference = [
-        {"timestamp": now, "temperature": 30, "humidity": 75, "pressure": None}
-    ]
-    bias = analytics_client.latest_bias(iot, reference)
-    assert bias is not None
-    assert bias["temp_bias_c"] is None
-    assert bias["hum_bias_percent"] == 1
-    assert bias["press_bias_hpa"] is None
-    assert bias["n_iot"] == 3
+def test_benchmark_matched_bias_uses_only_selected_source_and_device(context):
+    for age in (120, 60, 0):
+        context.add(age_seconds=age)
+    context.add(device_id="other", temperature=55)
+    context.ref()
+    context.ref(source="openweather", temperature=10)
+    context.ref(age_seconds=-10, temperature=10)
+    context.bias.return_value = ({'metrics':{'temperature':{'mbe':2}}, 'meta':{'notes':[]}}, pd.DataFrame([{
+        'timestamp':NOW-timedelta(seconds=60), 'n_iot':3,
+        'iot_temperature':32, 'ref_temperature':30, 'iot_humidity':75, 'ref_humidity':70,
+        'iot_pressure':1008, 'ref_pressure':1000,
+    }]))
+    result = context.client.get("/api/weather/benchmark", params={"device_id": "target"}).json()
+    assert len(result["reference"]) == 1
+    assert result["reason"] == "matched"
+    assert result["latest_bias"]["temp_bias_c"] == 2
+    assert result["latest_bias"]["humidity_bias_pct"] == 5
+    assert result["latest_bias"]["pressure_bias_hpa"] == 8
+    assert result["metrics"]["temperature"]["mbe"] == 2
+    iot, reference, device, source = context.bias.call_args.args
+    assert len(iot) == 3 and len(reference) == 1 and device == 'target' and source == 'open-meteo'
 
 
-def test_benchmark_source_window_and_order(
-    dashboard_data: tuple[str, str, str],
-) -> None:
-    """Lọc đúng source và timestamp; giữ NULL, sắp xếp tham chiếu tăng dần."""
-    device_id, source, other_source = dashboard_data
-    now = datetime.now(UTC)
-    _add_reference(source, now)
-    _add_reference(source, now - timedelta(minutes=20), humidity=None)
-    _add_reference(source, now - timedelta(hours=2))
-    _add_reference(other_source, now, temperature=40)
-    response = client.get(
-        f"{API}/benchmark",
-        params={
-            "device_id": device_id,
-            "source": source,
-            "hours": 1,
-        },
-    )
-    assert response.status_code == 200
-    reference = response.json()["reference"]
-    assert len(reference) == 2
-    assert [row["timestamp"] for row in reference] == sorted(
-        row["timestamp"] for row in reference
-    )
-    assert all(row["temperature"] == 30 for row in reference)
-    assert reference[0]["humidity"] is None
+def test_benchmark_insufficient_pairs_returns_null_bias(context):
+    context.add()
+    context.ref()
+    result = context.client.get("/api/weather/benchmark", params={"device_id": "target"}).json()
+    assert len(result["reference"]) == 1 and result["latest_bias"] is None
+    assert result["reason"] == "no_overlap"
 
 
-def test_benchmark_latest_non_null_reference(
-    dashboard_data: tuple[str, str, str],
-) -> None:
-    """Bỏ mốc mới nhất toàn NULL khi chọn mốc tính bias, vẫn giữ trên series."""
-    device_id, source, _ = dashboard_data
-    now = datetime.now(UTC)
-    valid_time = now - timedelta(minutes=10)
-    _add_reference(source, valid_time)
-    _add_reference(source, now, temperature=None, humidity=None, pressure=None)
-    _add_iot(device_id, [valid_time - timedelta(minutes=index) for index in range(3)])
-    response = client.get(
-        f"{API}/benchmark", params={"device_id": device_id, "source": source}
-    )
-    assert response.status_code == 200
-    assert len(response.json()["reference"]) == 2
-    assert (
-        datetime.fromisoformat(response.json()["latest_bias"]["reference_timestamp"])
-        == valid_time
-    )
+@pytest.mark.integrated_model
+def test_live_crawler_records_are_visible_to_dashboard(context, monkeypatch):
+    """Exercise the crawler -> DB -> actual dashboard source -> API contract."""
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.syspath_prepend(str(root))
+    from ai_engine.openweather_benchmark import crawler
+
+    payload = {"current": {
+        "time": "2026-10-27T11:45", "temperature_2m": 30.5,
+        "relative_humidity_2m": 72, "surface_pressure": 1008.5, "precipitation": 0,
+    }}
+    response = SimpleNamespace(raise_for_status=lambda: None, json=lambda: payload)
+    monkeypatch.setattr(crawler.requests, "get", Mock(return_value=response))
+    record, = crawler.WeatherBenchmarkCrawler().fetch_open_meteo_current()
+    context.db.add(ReferenceWeather(
+        id=1000, source=record.source, timestamp=record.timestamp,
+        lat=record.lat, lon=record.lon, temperature=record.temperature,
+        humidity=record.humidity, pressure=record.pressure,
+        precipitation=record.precipitation,
+    ))
+    context.db.flush()
+    dashboard = (root / "dashboard/js/app.js").read_text(encoding="utf-8")
+    source = re.search(r'REF_SOURCE:\s*"([^"]+)"', dashboard).group(1)
+
+    result = context.client.get("/api/weather/benchmark", params={"source": source})
+
+    assert result.status_code == 200
+    assert result.json()["source"] == record.source
+    assert len(result.json()["reference"]) == 1
+    assert result.json()["reference"][0]["temperature"] == 30.5
 
 
-def test_benchmark_does_not_fall_back_to_older_match(
-    dashboard_data: tuple[str, str, str],
-) -> None:
-    """Mốc mới nhất không có IoT thì bias null dù mốc cũ ghép được."""
-    device_id, source, _ = dashboard_data
-    now = datetime.now(UTC)
-    older = now - timedelta(minutes=20)
-    _add_reference(source, older)
-    _add_reference(source, now)
-    _add_iot(device_id, [older - timedelta(minutes=index) for index in range(3)])
-    response = client.get(
-        f"{API}/benchmark", params={"device_id": device_id, "source": source}
-    )
-    assert response.status_code == 200
-    assert response.json()["latest_bias"] is None
+@pytest.mark.parametrize("source,temperature", [
+    ("open-meteo", 30), ("open-meteo-15min", 31), ("openweather", 32),
+])
+def test_benchmark_preserves_separate_hourly_live_and_openweather_sources(context, source, temperature):
+    # Identical timestamps must not mix hourly backfill with live observations.
+    for name, value in (("open-meteo", 30), ("open-meteo-15min", 31), ("openweather", 32)):
+        context.ref(source=name, temperature=value)
+    result = context.client.get("/api/weather/benchmark", params={"source": source})
+    assert result.status_code == 200
+    assert [point["temperature"] for point in result.json()["reference"]] == [temperature]
+    # Keep the existing API default for clients consuming hourly backfill.
+    default = context.client.get("/api/weather/benchmark").json()
+    assert default["source"] == "open-meteo"
+    assert [point["temperature"] for point in default["reference"]] == [30]
 
 
-@pytest.mark.parametrize(
-    "params",
-    [
-        {},
-        {"device_id": ""},
-        {"device_id": "test_dash_invalid", "hours": 0},
-        {"device_id": "test_dash_invalid", "hours": 169},
-        {"device_id": "test_dash_invalid", "source": "x" * 31},
-    ],
-)
-def test_benchmark_validation(params: dict) -> None:
-    """Kiểm tra giới hạn mã trạm, nguồn và cửa sổ tham chiếu."""
-    assert client.get(f"{API}/benchmark", params=params).status_code == 422
+@pytest.mark.parametrize("path,params", [
+    ("sensor-health", {"window_minutes": 0}), ("sensor-health", {"window_minutes": 1441}),
+    ("benchmark", {"hours": 0}), ("benchmark", {"source": "arbitrary"}),
+])
+def test_analytics_rejects_invalid_query(context, path, params):
+    assert context.client.get(f"/api/weather/{path}", params=params).status_code == 422
 
 
-def test_benchmark_unavailable_bias(
-    dashboard_data: tuple[str, str, str],
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Thiếu thư viện bias vẫn trả series tham chiếu và ghi cảnh báo."""
-    device_id, source, _ = dashboard_data
-    _add_reference(source, datetime.now(UTC))
-    monkeypatch.setattr(analytics_client, "HAS_BIAS", False)
-    response = client.get(
-        f"{API}/benchmark", params={"device_id": device_id, "source": source}
-    )
-    assert response.status_code == 200
-    assert len(response.json()["reference"]) == 1
-    assert response.json()["latest_bias"] is None
-    assert "Bias analysis unavailable" in caplog.text
+def test_disabled_analytics_preserves_reference_without_claiming_analysis(context, monkeypatch):
+    monkeypatch.setattr(settings, 'ANALYTICS_ENGINE_MODE', 'disabled')
+    context.add()
+    context.ref()
+    health = context.client.get('/api/weather/sensor-health', params={'device_id':'target'}).json()
+    bias = context.client.get('/api/weather/benchmark', params={'device_id':'target'}).json()
+    assert health['status'] == 'UNKNOWN' and health['reason'] == 'analytics_not_integrated'
+    assert bias['reason'] == 'analytics_not_integrated' and len(bias['reference']) == 1
+    assert bias['latest_bias'] is None and bias['metrics'] == {}
+    context.loader.assert_not_called()
 
 
-@pytest.mark.parametrize("sqlstate", ["42P01", "42703"])
-@pytest.mark.parametrize("code_attribute", ["sqlstate", "pgcode"])
-def test_benchmark_programming_error(sqlstate: str, code_attribute: str) -> None:
-    """Kiểm tra rollback và mã lỗi của cả psycopg3 lẫn psycopg2."""
-    db = MagicMock()
-    original = MagicMock(spec=[code_attribute], **{code_attribute: sqlstate})
-    error = ProgrammingError("SELECT reference_weather", {}, original)
-    db.query.side_effect = error
-    app.dependency_overrides[get_db] = lambda: db
-    try:
-        if sqlstate == "42P01":
-            response = client.get(
-                f"{API}/benchmark", params={"device_id": "test_dash_missing"}
-            )
-            assert response.status_code == 503
-            assert (
-                response.json()["detail"]
-                == "reference_weather table missing - run migration 002"
-            )
-        else:
-            with pytest.raises(ProgrammingError):
-                client.get(
-                    f"{API}/benchmark", params={"device_id": "test_dash_missing"}
-                )
-        db.rollback.assert_called_once()
-    finally:
-        app.dependency_overrides.pop(get_db, None)
+@pytest.mark.parametrize('error,reason', [(ImportError('not merged'),'analytics_unavailable'), (RuntimeError('provider failed'),'analytics_failed')])
+def test_missing_or_failed_provider_does_not_break_api(context, error, reason):
+    context.add()
+    context.ref()
+    context.loader.side_effect = error
+    health = context.client.get('/api/weather/sensor-health', params={'device_id':'target'})
+    benchmark = context.client.get('/api/weather/benchmark', params={'device_id':'target'})
+    assert health.status_code == benchmark.status_code == 200
+    assert health.json()['status'] == 'UNKNOWN' and health.json()['reason'] == reason
+    assert benchmark.json()['latest_bias'] is None and benchmark.json()['reason'] == reason
 
 
-def test_real_driver_missing_table_sqlstate() -> None:
-    """Driver thật trả mã 42P01 khi SELECT bảng không tồn tại, rồi rollback."""
-    table_name = f"test_dash_missing_{uuid4().hex}"
-    with pytest.raises(ProgrammingError) as exc_info, get_db_context() as db:
-        db.execute(text(f"SELECT * FROM {table_name}"))
-    original = exc_info.value.orig
-    code = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
-    assert code == "42P01"
+def test_malformed_analytics_does_not_report_sensor_ok(context):
+    context.add()
+    context.detector.analyze.return_value = {'status':'OK', 'anomalies':float('nan')}
+    result = context.client.get('/api/weather/sensor-health', params={'device_id':'target'}).json()
+    assert result['status'] == 'UNKNOWN' and result['reason'] == 'analytics_failed'
 
 
-@pytest.mark.parametrize("rain_source", ["model", "heuristic"])
-def test_forecast_preserves_rain_source(
-    dashboard_data: tuple[str, str, str],
-    monkeypatch: pytest.MonkeyPatch,
-    rain_source: str,
-) -> None:
-    """Mock predict_forecast và kiểm tra cả ba horizon giữ rain_source."""
-    device_id, _, _ = dashboard_data
-    forecast = {
-        "device_id": device_id,
-        "generated_at": datetime.now(UTC),
-        "current_temperature": 30,
-        "current_humidity": 75,
-        "current_pressure": 1008,
-        "alert_triggered": False,
-        "alert_message": None,
-        **{
-            f"plus_{minutes}m": {
-                "temperature_c": 30,
-                "rain_probability": 0.1,
-                "rain_level": "Low",
-                "rain_source": rain_source,
-            }
-            for minutes in (10, 30, 60)
-        },
-    }
-    monkeypatch.setattr(forecast_client, "HAS_AI_ENGINE", True)
-    predictor = MagicMock(return_value=forecast)
-    monkeypatch.setattr(
-        forecast_client, "ai_predict_forecast", predictor, raising=False
-    )
-    monkeypatch.setattr(
-        endpoints.AlertService, "evaluate_and_trigger", lambda **kwargs: None
-    )
-    response = client.get(f"{API}/forecast", params={"device_id": device_id})
-    assert response.status_code == 200
-    predictor.assert_called_once()
-    for minutes in (10, 30, 60):
-        assert response.json()[f"plus_{minutes}m"]["rain_source"] == rain_source
-
-
-@pytest.mark.parametrize(
-    ("db_value", "default", "expected"),
-    [(None, 0.85, 0.85), ("0.42", 0.85, 0.42), ("invalid", 0.85, 0.85)],
-)
-def test_forecast_uses_same_threshold_as_get(
-    dashboard_data: tuple[str, str, str],
-    preserved_threshold: None,
-    monkeypatch: pytest.MonkeyPatch,
-    db_value: str | None,
-    default: float,
-    expected: float,
-) -> None:
-    """/forecast truyền vào AlertService đúng ngưỡng mà GET /alerts/threshold trả."""
-    device_id, _, _ = dashboard_data
-    monkeypatch.setattr(settings, "RAIN_ALERT_THRESHOLD", default)
-    if db_value is not None:
-        with get_db_context() as db:
-            db.add(
-                SystemConfig(config_key="rain_alert_threshold", config_value=db_value)
-            )
-    forecast = {
-        "device_id": device_id,
-        "generated_at": datetime.now(UTC),
-        "current_temperature": 30,
-        "current_humidity": 75,
-        "current_pressure": 1008,
-        "alert_triggered": False,
-        "alert_message": None,
-        **{
-            f"plus_{minutes}m": {
-                "temperature_c": 30,
-                "rain_probability": 0.1,
-                "rain_level": "Low",
-            }
-            for minutes in (10, 30, 60)
-        },
-    }
-    monkeypatch.setattr(forecast_client, "HAS_AI_ENGINE", True)
-    monkeypatch.setattr(
-        forecast_client,
-        "ai_predict_forecast",
-        MagicMock(return_value=forecast),
-        raising=False,
-    )
-    trigger = MagicMock()
-    monkeypatch.setattr(endpoints.AlertService, "evaluate_and_trigger", trigger)
-    response = client.get(f"{API}/forecast", params={"device_id": device_id})
-    assert response.status_code == 200
-    trigger.assert_called_once()
-    threshold = client.get(f"{API}/alerts/threshold").json()["threshold"]
-    assert trigger.call_args.kwargs["threshold"] == expected == threshold
-
-
-def test_bias_available_without_requests() -> None:
-    """Khi chỉ cài dependencies backend (không có requests) bias vẫn khả dụng."""
-    code = (
-        "import sys; sys.modules['requests'] = None; "
-        "from app.services import analytics_client; "
-        "assert analytics_client.HAS_BIAS and analytics_client.HAS_ANOMALY"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        cwd=Path(__file__).resolve().parents[1],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
+def test_integration_status_does_not_probe_unmerged_code(context, monkeypatch):
+    monkeypatch.setattr(settings,'FORECAST_ENGINE_MODE','heuristic')
+    monkeypatch.setattr(settings,'ANALYTICS_ENGINE_MODE','disabled')
+    result = context.client.get('/api/weather/integrations').json()
+    assert result['forecast']['status'] == 'local_heuristic'
+    assert result['analytics']['status'] == 'not_integrated'
+    context.loader.assert_not_called()

@@ -95,7 +95,7 @@ ai_engine/
    - Đánh giá bằng **Brier Score**, Brier Skill Score so với baseline và **Reliability Diagram**.
 3. **Phát hiện Bất thường Cảm biến (`sensor_analytics/`):**
    - Bản ghi đơn lẻ: thiếu giá trị, vượt giới hạn vật lý (5–55 °C, 10–100 %, 950–1050 hPa) và spike theo tốc độ thay đổi thực ($|\Delta x| / \max(\Delta t, 1\text{ phút})$; bỏ qua khi mất dữ liệu > 10 phút).
-   - Frozen value BME280: một đại lượng không đổi suốt 30 phút (bỏ qua độ ẩm bão hòa ≥ 99%).
+   - Frozen value BMP280/DHT11: một đại lượng không đổi suốt 30 phút (bỏ qua độ ẩm bão hòa ≥ 99%). DHT11 có độ phân giải thô nên giá trị lặp có thể hợp lệ; đối chiếu log và hiệu chỉnh ngưỡng trước khi kết luận cảm biến hỏng.
    - Đọng nước cảm biến mưa: báo ướt ở mọi mẫu trong 6 giờ, độ ẩm trung bình < 65% và áp suất không giảm quá 0.5 hPa.
    - Mọi cửa sổ tính theo `timestamp`, không theo số dòng. `SensorAnomalyDetector.analyze(df)` trả báo cáo tổng hợp `status` = `OK` / `WARNING` / `FAULT` cho Dashboard. Ngưỡng cấu hình qua `AnomalyConfig`.
 4. **Đối chuẩn Khí tượng (`openweather_benchmark/`):**
@@ -161,11 +161,11 @@ Hàm `predict_forecast(recent_data, threshold=0.70)` trong `inference/unified_fo
 
 | # | Yêu cầu | Bên phụ trách | Trạng thái |
 |---|---|---|---|
-| 1 | `/forecast` truy vấn dữ liệu theo **khoảng thời gian**, không theo số bản ghi: tối thiểu `min_history_minutes` = 61 phút, khuyến nghị `recommended_history_minutes` = 76 phút (dự phòng mất mẫu/lệch bin). Hiện đang lấy 30 bản ghi ≈ 3–5 phút ở chu kỳ 5–10 s nên feature mưa không đủ. | TV1 | Chưa làm |
-| 2 | Đầu vào: `timestamp` (UTC ISO-8601, thời điểm đo của thiết bị), `temperature` (°C), `humidity` (%), `pressure` (hPa, áp suất tại trạm — không quy về mực nước biển), `rain_detected` (0/1), `rain_raw` (ADC, bắt buộc nếu có trong `input_columns` của artifact). Một `device_id` mỗi lần gọi. | TV1 | Chưa làm (backend chưa ép một `device_id`; inference tạm lọc theo trạm của bản ghi mới nhất) |
+| 1 | `/forecast` truy vấn dữ liệu theo **khoảng thời gian**, không theo số bản ghi: tối thiểu `min_history_minutes` = 61 phút, khuyến nghị `recommended_history_minutes` = 76 phút (dự phòng mất mẫu/lệch bin). | TV1 | Đã triển khai cục bộ: lấy toàn bộ mẫu 76 phút gần nhất, bỏ timestamp tương lai; trả 404 nếu không có mẫu gần đây. Metadata lịch sử và `rain_source` được giữ trong API. Chờ review/merge BE-05. |
+| 2 | Đầu vào: `timestamp` (UTC ISO-8601, thời điểm đo của thiết bị), `temperature` (°C), `humidity` (%), `pressure` (hPa, áp suất tại trạm — không quy về mực nước biển), `rain_detected` (0/1), `rain_raw` (ADC, bắt buộc nếu có trong `input_columns` của artifact). Một `device_id` mỗi lần gọi. | TV1 | Đã triển khai cục bộ: lọc đúng một trạm; không truyền ID thì chọn trạm có mẫu mới nhất trong cửa sổ. Firmware hiện gửi uptime nên timestamp lưu DB là thời điểm backend nhận; simulator có gửi UTC. Chờ review/merge BE-05. |
 | 3 | Thiếu lịch sử hoặc thiếu model một horizon: chỉ horizon đó không có dự báo; **giữ nguyên kết quả model hợp lệ của các horizon còn lại** và log rõ lý do. Hiện `unified_forecast.py` thay **cả 3** horizon bằng heuristic khi thiếu 1 horizon và dùng `print`. | TV2 | Đã làm (`_rain_model_probs`, `rain_source`) |
 | 4 | Feature mưa nên dựng bằng `rain_classification.features.resample_to_grid()` + `extract_rain_features()` để khớp lúc train (bin $(t-1\text{m}, t]$, không nội suy). `TimeSeriesPreprocessor.clean_and_resample` dùng bin $[t, t+1\text{m})$ + nội suy/bfill nên lệch nhẹ so với lúc train. | TV2 | Đã làm |
-| 5 | `alert_triggered` cần nhận ngưỡng từ `system_config` (tham số `threshold`) thay vì cố định 0.70. | TV2 + TV1 | AI: đã thêm tham số `threshold`. TV1: `ForecastClient`/`/forecast` cần truyền `rain_alert_threshold` vào |
+| 5 | `alert_triggered` cần nhận ngưỡng từ `system_config` (tham số `threshold`) thay vì cố định 0.70. | TV2 + TV1 | AI và Backend đã truyền `threshold`; fallback dùng cùng ngưỡng. Chờ review/merge BE-05. |
 | 6 | Khối `except` trong `unified_forecast.py` dùng `print` tiếng Việt có dấu: trên console Windows (cp1258) chính lệnh `print` ném `UnicodeEncodeError` khi model mưa từ chối dự đoán do thiếu lịch sử. Cần chuyển sang `logging`. | TV2 | Đã làm |
 
 ---

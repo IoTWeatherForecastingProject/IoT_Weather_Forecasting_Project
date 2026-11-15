@@ -1,283 +1,60 @@
 <!DOCTYPE html>
-<html lang="vi" class="dark">
+<html lang="vi">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IoT Local Weather SCADA & AI Forecasting</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        scada: {
-                            bg: '#0b0f19',
-                            card: '#151d30',
-                            border: '#1f293d',
-                            accent: '#06b6d4',
-                            warning: '#f59e0b',
-                            danger: '#ef4444',
-                            success: '#10b981'
-                        }
-                    }
-                }
-            }
-        }
-    </script>
-    <!-- ApexCharts CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1/dist/apexcharts.min.js"></script>
-    <link rel="stylesheet" href="css/style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#091522">
+  <meta name="description" content="Thời tiết tại trạm IoT và dự báo trong 60 phút tới.">
+  <script>
+    const view = new URLSearchParams(location.search).get("view");
+    document.documentElement.dataset.view = ["forecast", "observations", "station"].includes(view) ? view : "forecast";
+  </script>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <title>Thời tiết tại trạm | IoT Local Weather</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1/dist/apexcharts.min.js"></script>
+  <link rel="stylesheet" href="css/style.css?v=pages-meteo-2">
 </head>
-<body class="bg-[#090d16] text-slate-100 min-h-screen">
-
-    <!-- Top Navigation / SCADA Header -->
-    <header class="border-b border-slate-800 bg-[#0d1322]/80 backdrop-blur sticky top-0 z-50">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 min-h-16 py-2 flex flex-wrap items-center justify-between gap-2">
-            <div class="flex items-center space-x-3">
-                <div class="w-9 h-9 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 00-9.78 2.096A4.001 4.001 0 003 15z" />
-                    </svg>
-                </div>
-                <div>
-                    <h1 class="text-lg font-bold tracking-wide text-slate-100 flex items-center gap-2">
-                        IOT LOCAL WEATHER SCADA
-                        <span class="text-xs px-2 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800 font-mono">v1.0</span>
-                    </h1>
-                    <p class="text-xs text-slate-400 font-mono">STATION: <span class="text-cyan-400" id="station-id">station01</span> | PROTOCOL: MQTT QoS 1</p>
-                </div>
-            </div>
-
-            <div class="flex items-center space-x-4">
-                <!-- Status Badge -->
-                <div class="flex items-center space-x-2 bg-slate-900/80 px-3 py-1.5 rounded-full border border-slate-800 text-xs font-mono">
-                    <span class="relative flex h-2.5 w-2.5">
-                        <span class="hidden" id="status-ping"></span>
-                        <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" id="status-dot"></span>
-                    </span>
-                    <span id="connection-status" class="text-amber-400">CONNECTING...</span>
-                </div>
-                <span id="backend-status" class="hidden text-xs font-mono px-2 py-1 rounded bg-rose-500/10 text-rose-400 border border-rose-500/30">MẤT KẾT NỐI BACKEND</span>
-
-                <!-- Clock -->
-                <div class="text-xs font-mono text-slate-400 hidden sm:block" id="live-clock">--:--:--</div>
-            </div>
-        </div>
-    </header>
-
-    <!-- Main Container -->
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-
-        <!-- Anomaly & Rain Alert Banner (Hidden by default) -->
-        <div id="alert-banner" class="hidden p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start space-x-3 text-amber-300">
-            <svg class="w-6 h-6 flex-shrink-0 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-            </svg>
-            <div class="flex-1 text-sm">
-                <span class="font-bold uppercase tracking-wider block" id="alert-title">Cảnh báo hệ thống</span>
-                <span id="alert-message" class="text-slate-300">Nội dung cảnh báo...</span>
-            </div>
-        </div>
-
-        <!-- 4 Realtime Metric Cards -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            
-            <!-- Temperature -->
-            <div class="scada-card rounded-2xl p-5 relative overflow-hidden group hover:border-cyan-500/40 transition-all">
-                <div class="flex justify-between items-start mb-2">
-                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Nhiệt độ (BME280)</span>
-                    <span class="p-2 rounded-lg bg-orange-500/10 text-orange-400">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                    </span>
-                </div>
-                <div class="flex items-baseline space-x-2">
-                    <span class="text-3xl font-bold font-mono text-slate-100" id="card-temp">--.-</span>
-                    <span class="text-sm font-semibold text-slate-400">°C</span>
-                </div>
-                <div class="mt-3 text-xs text-slate-400 flex items-center justify-between">
-                    <span>Sai lệch vs tham chiếu:</span>
-                    <span class="font-mono text-slate-500" id="bias-temp" title="IoT - tham chiếu tại mốc tham chiếu gần nhất; N/A = chưa có dữ liệu đối chuẩn">--</span>
-                </div>
-            </div>
-
-            <!-- Humidity -->
-            <div class="scada-card rounded-2xl p-5 relative overflow-hidden group hover:border-cyan-500/40 transition-all">
-                <div class="flex justify-between items-start mb-2">
-                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Độ ẩm Không khí</span>
-                    <span class="p-2 rounded-lg bg-blue-500/10 text-blue-400">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
-                    </span>
-                </div>
-                <div class="flex items-baseline space-x-2">
-                    <span class="text-3xl font-bold font-mono text-slate-100" id="card-hum">--.-</span>
-                    <span class="text-sm font-semibold text-slate-400">%</span>
-                </div>
-                <div class="mt-3 w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                    <div class="bg-blue-500 h-1.5 rounded-full transition-all duration-500" id="bar-hum" style="width: 0%"></div>
-                </div>
-            </div>
-
-            <!-- Atmospheric Pressure -->
-            <div class="scada-card rounded-2xl p-5 relative overflow-hidden group hover:border-cyan-500/40 transition-all">
-                <div class="flex justify-between items-start mb-2">
-                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Khí áp Khí quyển</span>
-                    <span class="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                    </span>
-                </div>
-                <div class="flex items-baseline space-x-2">
-                    <span class="text-3xl font-bold font-mono text-slate-100" id="card-press">----.-</span>
-                    <span class="text-sm font-semibold text-slate-400">hPa</span>
-                </div>
-                <div class="mt-3 text-xs text-slate-400 flex items-center justify-between">
-                    <span>Xu hướng 60 phút:</span>
-                    <span class="font-mono text-slate-500" id="trend-press">--</span>
-                </div>
-            </div>
-
-            <!-- Rain Sensor Status -->
-            <div class="scada-card rounded-2xl p-5 relative overflow-hidden group hover:border-cyan-500/40 transition-all">
-                <div class="flex justify-between items-start mb-2">
-                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Trạng thái Cảm biến Mưa</span>
-                    <span class="p-2 rounded-lg bg-cyan-500/10 text-cyan-400">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
-                    </span>
-                </div>
-                <div class="flex items-baseline space-x-2">
-                    <span class="text-2xl font-bold font-mono text-slate-500" id="card-rain-status">--</span>
-                </div>
-                <div class="mt-3 text-xs text-slate-400 flex items-center justify-between">
-                    <span>Giá trị ADC thô:</span>
-                    <span class="font-mono text-slate-300" id="card-rain-raw">----</span>
-                </div>
-            </div>
-
-        </div>
-
-        <!-- Middle Section: Chart & Forecast Cards -->
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-            <!-- Left column: chart + sensor health (2 cols) -->
-            <div class="lg:col-span-2 space-y-6 min-w-0">
-
-            <!-- Realtime Comparative Chart -->
-            <div class="scada-card rounded-2xl p-4 sm:p-6 space-y-4">
-                <div class="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                        <h2 class="text-base font-bold text-slate-100 tracking-wide">Chuỗi Thời Gian & Đối Chuẩn Khí Tượng</h2>
-                        <p class="text-xs text-slate-400">2 giờ gần nhất của trạm IoT so với dữ liệu tham chiếu Open-Meteo (theo giờ)</p>
-                    </div>
-                    <div class="flex rounded-lg border border-slate-700 overflow-hidden text-xs font-mono" role="tablist" id="chart-tabs">
-                        <button type="button" data-var="temperature" class="chart-tab px-3 py-1.5" role="tab">Nhiệt độ</button>
-                        <button type="button" data-var="humidity" class="chart-tab px-3 py-1.5 border-l border-slate-700" role="tab">Độ ẩm</button>
-                        <button type="button" data-var="pressure" class="chart-tab px-3 py-1.5 border-l border-slate-700" role="tab">Áp suất</button>
-                    </div>
-                </div>
-                <div id="weather-chart" class="w-full h-72"></div>
-                <p class="text-xs text-slate-500" id="chart-note">Đang tải lịch sử...</p>
-            </div>
-
-            <!-- Sensor Health (SA-03) -->
-            <div class="scada-card rounded-2xl p-4 sm:p-6 space-y-3">
-                <div class="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                        <h2 class="text-base font-bold text-slate-100 tracking-wide">Sức Khỏe Cảm Biến</h2>
-                        <p class="text-xs text-slate-400">Spike, giá trị kẹt (BME280), đọng nước cảm biến mưa — cửa sổ 6 giờ</p>
-                    </div>
-                    <span id="health-badge" class="text-xs font-mono font-bold px-2.5 py-1 rounded-full border bg-slate-800 text-slate-400 border-slate-700">UNKNOWN</span>
-                </div>
-                <ul id="health-list" class="space-y-2 text-sm"></ul>
-                <p class="text-xs text-slate-500" id="health-note">Đang kiểm tra...</p>
-            </div>
-
-            </div>
-
-            <!-- Short-Term AI Forecasting Panel (1 col) -->
-            <div class="scada-card rounded-2xl p-6 space-y-5">
-                <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-                    <div>
-                        <h2 class="text-base font-bold text-slate-100 tracking-wide">Dự Báo Ngắn Hạn AI</h2>
-                        <p class="text-xs text-slate-400">Mô hình Hồi quy + Phân loại hiệu chuẩn</p>
-                        <p class="text-xs text-slate-500 font-mono" id="fc-updated">Chưa có dự báo</p>
-                    </div>
-                    <button id="btn-refresh-forecast" class="text-xs text-cyan-400 hover:text-cyan-300 transition-colors flex items-center gap-1">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                        Làm mới
-                    </button>
-                </div>
-
-                <!-- Forecast Horizons: +10m, +30m, +60m -->
-                <div class="space-y-3">
-                    <!-- +10 min -->
-                    <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
-                        <div class="flex justify-between items-center mb-1">
-                            <span class="text-xs font-mono text-cyan-400 font-bold">+10 PHÚT <span id="fc-src-10" class="hidden ml-1 px-1.5 py-0.5 rounded text-[10px] font-normal border"></span></span>
-                            <span class="text-sm font-bold font-mono text-slate-200" id="fc-temp-10">--.- °C</span>
-                        </div>
-                        <div class="flex justify-between items-center text-xs text-slate-400 mb-1.5">
-                            <span>Xác suất mưa:</span>
-                            <span class="font-mono text-slate-200" id="fc-rain-10">--%</span>
-                        </div>
-                        <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
-                            <div class="bg-cyan-500 h-2 rounded-full transition-all duration-500" id="fc-bar-10" style="width: 0%"></div>
-                        </div>
-                    </div>
-
-                    <!-- +30 min -->
-                    <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
-                        <div class="flex justify-between items-center mb-1">
-                            <span class="text-xs font-mono text-cyan-400 font-bold">+30 PHÚT <span id="fc-src-30" class="hidden ml-1 px-1.5 py-0.5 rounded text-[10px] font-normal border"></span></span>
-                            <span class="text-sm font-bold font-mono text-slate-200" id="fc-temp-30">--.- °C</span>
-                        </div>
-                        <div class="flex justify-between items-center text-xs text-slate-400 mb-1.5">
-                            <span>Xác suất mưa:</span>
-                            <span class="font-mono text-slate-200" id="fc-rain-30">--%</span>
-                        </div>
-                        <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
-                            <div class="bg-amber-500 h-2 rounded-full transition-all duration-500" id="fc-bar-30" style="width: 0%"></div>
-                        </div>
-                    </div>
-
-                    <!-- +60 min -->
-                    <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
-                        <div class="flex justify-between items-center mb-1">
-                            <span class="text-xs font-mono text-cyan-400 font-bold">+60 PHÚT <span id="fc-src-60" class="hidden ml-1 px-1.5 py-0.5 rounded text-[10px] font-normal border"></span></span>
-                            <span class="text-sm font-bold font-mono text-slate-200" id="fc-temp-60">--.- °C</span>
-                        </div>
-                        <div class="flex justify-between items-center text-xs text-slate-400 mb-1.5">
-                            <span>Xác suất mưa:</span>
-                            <span class="font-mono text-slate-200" id="fc-rain-60">--%</span>
-                        </div>
-                        <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
-                            <div class="bg-rose-500 h-2 rounded-full transition-all duration-500" id="fc-bar-60" style="width: 0%"></div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 2-Way Closed-Loop Control Widget -->
-                <div class="border-t border-slate-800 pt-4 space-y-3">
-                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400 block">Điều Khiển Ngưỡng Cảnh Báo Phản Hồi</span>
-                    <div class="flex items-center justify-between text-xs font-mono">
-                        <span class="text-slate-400">Ngưỡng mưa kích hoạt còi:</span>
-                        <span class="text-cyan-400 font-bold text-sm" id="threshold-val">--</span>
-                    </div>
-                    <input type="range" min="40" max="95" value="70" step="5" aria-label="Ngưỡng cảnh báo mưa" class="w-full accent-cyan-400 cursor-pointer" id="threshold-slider">
-                    <button id="btn-save-threshold" class="w-full py-2 px-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 text-xs font-semibold tracking-wider text-white transition-all shadow-lg shadow-cyan-900/30">
-                        CẬP NHẬT XUỐNG SERVER
-                    </button>
-                    <span id="threshold-applied" class="text-xs text-center block text-slate-500 font-mono">Đang đọc ngưỡng từ server...</span>
-                    <span id="threshold-status" class="text-xs text-center block text-slate-400" role="status"></span>
-                </div>
-
-            </div>
-
-        </div>
-
-    </main>
-
-    <script src="js/app.js"></script>
+<body>
+  <svg class="icon-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-cloud" viewBox="0 0 64 64"><path d="M18 48h29a11 11 0 0 0 1-22 17 17 0 0 0-32-3A13 13 0 0 0 18 48Z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/></symbol>
+    <symbol id="i-rain" viewBox="0 0 64 64"><path d="M18 40h29a11 11 0 0 0 1-22 17 17 0 0 0-32-3A13 13 0 0 0 18 40Z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><path d="m20 47-3 7m15-7-3 7m15-7-3 7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></symbol>
+    <symbol id="i-drop" viewBox="0 0 24 24"><path d="M12 2C8 8 5 11.5 5 15a7 7 0 0 0 14 0c0-3.5-3-7-7-13Z" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M4 17a9 9 0 1 1 16 0M5 19h14M12 15l4-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-signal" viewBox="0 0 24 24"><path d="M3 9a14 14 0 0 1 18 0M6 12a9 9 0 0 1 12 0m-9 3a4 4 0 0 1 6 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="19" r="1" fill="currentColor"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20L12 3Z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 9v5m0 3h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M5.5 9a7 7 0 0 1 12-2L20 12M4 12l2.5 5a7 7 0 0 0 12-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  </svg>
+  <header class="site-header"><div class="shell header-inner">
+    <a class="brand" href="?view=forecast"><span class="brand-mark"><svg><use href="#i-cloud"/></svg><i></i></span><span><strong>local<span>weather</span></strong><small>TRẠM THỜI TIẾT IOT</small></span></a>
+    <nav class="header-nav" aria-label="Điều hướng chính"><a href="?view=forecast" data-view-link="forecast">Dự báo</a><a href="?view=observations" data-view-link="observations">Quan trắc</a><a href="?view=station" data-view-link="station">Trạm đo</a></nav>
+    <div class="header-status"><span class="connection-pill"><span class="status-indicator" aria-hidden="true"><span id="status-ping" class="pulse-indicator bg-emerald-500 opacity-75 hidden"></span><span id="status-dot" class="bg-amber-500"></span></span><span id="connection-status">Đang kết nối…</span></span><span id="backend-status" class="backend-error hidden">Mất kết nối backend</span><span id="live-clock" class="header-clock">--:--:--</span></div>
+  </div></header>
+  <main class="shell main-content" id="top">
+    <div class="page-intro"><div><p class="eyebrow" id="view-eyebrow">TỔNG QUAN THỜI TIẾT</p><h1 id="view-title">Thời tiết tại trạm</h1><p id="view-description">Quan trắc trực tiếp và xu hướng trong 60 phút tới.</p></div><span class="station-chip"><svg><use href="#i-signal"/></svg> Trạm <strong id="station-id">station01</strong></span></div>
+    <p id="live-data-warning" role="status" aria-live="polite" class="data-warning hidden"></p>
+    <div id="alert-banner" role="alert" class="alert-banner hidden"><svg><use href="#i-alert"/></svg><div><strong id="alert-title">Cảnh báo mưa</strong><p id="alert-message"></p></div></div>
+    <section class="hero panel" aria-labelledby="hero-title">
+      <div class="hero-copy"><div class="hero-topline"><span class="eyebrow">ĐIỀU KIỆN HIỆN TẠI · QUAN TRẮC IOT</span><span id="hero-freshness" class="freshness">Đang chờ số đo</span></div><h2 id="hero-title">Bầu trời tại trạm</h2><div class="hero-reading"><span id="card-temp" class="hero-temp">--</span><span class="hero-unit">°C</span></div><p id="card-rain-status" class="hero-condition">Đang chờ dữ liệu mưa</p><p id="hero-summary" class="hero-summary">Dự báo sẽ xuất hiện khi trạm gửi đủ số đo.</p><div class="hero-updated"><svg><use href="#i-clock"/></svg><span id="hero-updated">Chưa có thời gian cập nhật</span></div></div>
+      <div class="hero-art" aria-hidden="true"><div class="hero-orb"></div><div class="hero-cloud hero-cloud-back"></div><div class="hero-cloud hero-cloud-front"></div><div class="hero-horizon"></div><svg id="hero-weather-icon"><use href="#i-cloud"/></svg></div>
+      <div class="hero-metrics"><div class="hero-metric"><span class="metric-icon"><svg><use href="#i-drop"/></svg></span><span><small>ĐỘ ẨM</small><strong><span id="card-hum">--.-</span><em>%</em></strong></span><span id="bar-hum" class="metric-progress"></span></div><div class="hero-metric"><span class="metric-icon"><svg><use href="#i-gauge"/></svg></span><span><small>ÁP SUẤT</small><strong><span id="card-press">----.-</span><em>hPa</em></strong></span><span id="trend-press" class="metric-detail">--</span></div><div class="hero-metric"><span class="metric-icon"><svg><use href="#i-rain"/></svg></span><span><small>CẢM BIẾN MƯA</small><strong id="hero-rain-short">Chưa có</strong></span><span class="metric-detail">ADC <span id="card-rain-raw">----</span></span></div></div>
+    </section>
+    <section id="forecast" class="forecast-section" aria-labelledby="forecast-title">
+      <div class="section-head"><div><p class="eyebrow">NHÌN VỀ PHÍA TRƯỚC</p><h2 id="forecast-title">60 phút tiếp theo</h2><p>Nhiệt độ và khả năng mưa tại ba mốc dự báo.</p></div><div class="section-action"><span id="fc-updated">Đang tải dự báo…</span><button id="btn-refresh-forecast" class="icon-button" type="button" aria-label="Làm mới dự báo" title="Làm mới dự báo"><svg><use href="#i-refresh"/></svg></button></div></div>
+      <div class="forecast-grid">
+        <article class="forecast-card panel" id="fc-card-10" data-risk="unknown"><div class="forecast-card-top"><span>01 / SẮP TỚI</span><svg id="fc-icon-10"><use href="#i-cloud"/></svg></div><h3>+10 phút</h3><p class="forecast-clock" id="fc-time-10">--:--</p><p class="forecast-temperature" id="fc-temp-10">--.- °C</p><div class="forecast-rain"><span>Khả năng mưa</span><strong id="fc-rain-10">--%</strong></div><div class="prob-track"><span id="fc-bar-10"></span></div><div class="forecast-card-foot"><span id="fc-risk-10">Đang chờ dự báo</span><span id="fc-src-10" class="source-tag hidden"></span></div></article>
+        <article class="forecast-card panel" id="fc-card-30" data-risk="unknown"><div class="forecast-card-top"><span>02 / TIẾP THEO</span><svg id="fc-icon-30"><use href="#i-cloud"/></svg></div><h3>+30 phút</h3><p class="forecast-clock" id="fc-time-30">--:--</p><p class="forecast-temperature" id="fc-temp-30">--.- °C</p><div class="forecast-rain"><span>Khả năng mưa</span><strong id="fc-rain-30">--%</strong></div><div class="prob-track"><span id="fc-bar-30"></span></div><div class="forecast-card-foot"><span id="fc-risk-30">Đang chờ dự báo</span><span id="fc-src-30" class="source-tag hidden"></span></div></article>
+        <article class="forecast-card panel" id="fc-card-60" data-risk="unknown"><div class="forecast-card-top"><span>03 / TRONG GIỜ</span><svg id="fc-icon-60"><use href="#i-cloud"/></svg></div><h3>+60 phút</h3><p class="forecast-clock" id="fc-time-60">--:--</p><p class="forecast-temperature" id="fc-temp-60">--.- °C</p><div class="forecast-rain"><span>Khả năng mưa</span><strong id="fc-rain-60">--%</strong></div><div class="prob-track"><span id="fc-bar-60"></span></div><div class="forecast-card-foot"><span id="fc-risk-60">Đang chờ dự báo</span><span id="fc-src-60" class="source-tag hidden"></span></div></article>
+      </div><div class="timeline" aria-label="Các mốc dự báo trong 60 phút"><span>HIỆN TẠI</span><div><i></i><i></i><i></i><i></i></div><span>+10 PHÚT</span><span>+30 PHÚT</span><span>+60 PHÚT</span></div><p class="forecast-disclaimer">“Heuristic” cho biết xác suất mưa được suy ra bằng quy tắc khi không có kết quả mô hình.</p>
+    </section>
+    <div class="insight-grid">
+      <section class="rain-panel panel" aria-labelledby="rain-title"><div class="panel-heading"><span class="panel-icon"><svg><use href="#i-rain"/></svg></span><div><p class="eyebrow">THEO DÕI MƯA</p><h2 id="rain-title">Cảnh báo mưa</h2></div></div><p id="rain-outlook" class="rain-outlook">Đang chờ dự báo để đánh giá khả năng mưa.</p><div class="rain-stat"><strong id="rain-peak">--%</strong><span>Xác suất cao nhất<br>trong 60 phút</span></div><div class="rain-threshold"><div><label for="threshold-slider">Ngưỡng cảnh báo</label><strong id="threshold-val">--</strong></div><input type="range" min="40" max="95" value="70" step="5" id="threshold-slider"><p id="threshold-applied">Đang đọc ngưỡng từ server…</p><button id="btn-save-threshold" class="primary-button" type="button">LƯU NGƯỠNG CẢNH BÁO</button><span id="threshold-status" role="status" aria-live="polite"></span></div></section>
+      <section class="chart-panel panel" id="observations" aria-labelledby="chart-title"><div class="chart-header"><div><p class="eyebrow">DỮ LIỆU QUAN TRẮC</p><h2 id="chart-title">Diễn biến tại trạm</h2><p>2 giờ gần nhất · Trạm IoT và tham chiếu Open-Meteo</p></div><div class="chart-tabs" role="tablist" aria-label="Chỉ số biểu đồ" id="chart-tabs"><button type="button" data-var="temperature" class="chart-tab" role="tab">Nhiệt độ</button><button type="button" data-var="humidity" class="chart-tab" role="tab">Độ ẩm</button><button type="button" data-var="pressure" class="chart-tab" role="tab">Áp suất</button></div></div><div class="chart-toolbar"><p id="chart-navigation-help">Lăn chuột để phóng to. Giữ Space và kéo để di chuyển.</p><button id="chart-reset-view" type="button">Khung mặc định</button></div><div class="chart-stage"><div id="chart-loading" class="chart-loading">Đang tải lịch sử quan trắc…</div><div id="weather-chart" tabindex="0" role="region" aria-label="Biểu đồ thời tiết" aria-describedby="chart-navigation-help"></div></div><p id="chart-note" class="chart-note">Đang tải lịch sử…</p><div class="chart-legend"><span><i></i>Quan trắc IoT</span><span><i></i>Tham chiếu Open-Meteo</span></div></section>
+    </div>
+    <section id="station" class="station-section" aria-labelledby="station-title"><div class="section-head"><div><p class="eyebrow">CHUYÊN SÂU</p><h2 id="station-title">Trạm đo &amp; lịch sử</h2><p>Chi tiết cảm biến, đối chuẩn và sự kiện mưa.</p></div></div><div class="station-grid"><section class="panel detail-panel" aria-labelledby="health-title"><div class="detail-header"><h3 id="health-title">Tín hiệu từ trạm</h3><span id="health-badge" class="health-badge">CHƯA ĐÁNH GIÁ</span></div><p class="detail-subtitle">Các tín hiệu có thể kiểm tra qua số đo trạm gửi về.</p><ul id="health-list" class="detail-list"></ul><p id="health-note" class="detail-note">Đang kiểm tra…</p></section><section class="panel detail-panel" aria-labelledby="rain-history-title"><div class="detail-header"><h3 id="rain-history-title">Lịch sử mưa</h3><span class="detail-tag">7 NGÀY</span></div><p class="detail-subtitle">Nhóm theo ngày ghi nhận ướt, gồm hôm nay và 6 ngày trước (giờ Việt Nam).</p><p id="rain-history-note" class="detail-note">Đang tải lịch sử…</p><ul id="rain-history-list" class="detail-list history-list"></ul></section><section class="panel detail-panel reference-panel" aria-labelledby="reference-title"><div class="detail-header"><h3 id="reference-title">Đối chuẩn nhiệt độ</h3><span class="detail-tag">OPEN-METEO</span></div><p class="detail-subtitle">Chênh lệch giữa trạm IoT và dữ liệu tham chiếu gần nhất.</p><div class="reference-value" id="bias-temp" title="IoT trừ tham chiếu tại mốc gần nhất; N/A khi chưa có dữ liệu đối chuẩn">--</div><p class="detail-note">Chỉ hiển thị khi có dữ liệu tham chiếu phù hợp.</p></section></div></section>
+  </main>
+  <footer class="site-footer"><div class="shell footer-inner"><span>IoT Local Weather <span>/</span> Trạm đo thời tiết địa phương</span><span>Quan trắc IoT · Tham chiếu Open-Meteo</span></div></footer>
+  <script src="js/app.js?v=hardware-signals-1"></script>
 </body>
 </html>
-

@@ -12,6 +12,9 @@ from app.api.endpoints import router as weather_router
 from app.schemas.weather import HealthCheckResponse
 from app.ingestion.mqtt_worker import MQTTIngestionWorker
 from app.db.session import check_db_connection
+from app.services.forecast_monitor import ForecastMonitor
+from app.services.schema_migrations import apply_migrations
+from app.db import session as database_session
 
 # Cấu hình logging
 logging.basicConfig(
@@ -83,17 +86,29 @@ async def lifespan(app: FastAPI):
     global mqtt_worker, loop_ref
     loop_ref = asyncio.get_running_loop()
     logger.info("[STARTUP] Khoi dong ung dung FastAPI Weather Backend...")
+    if settings.AUTO_MIGRATE:
+        await asyncio.to_thread(apply_migrations, database_session.engine)
 
     # Khởi động MQTT Ingestion Worker
     mqtt_worker = MQTTIngestionWorker(broadcast_callback=on_mqtt_data_received)
     mqtt_worker.start()
-
-    yield
-
-    logger.info("[SHUTDOWN] Dang dung MQTT Ingestion Worker...")
-    if mqtt_worker:
+    app.state.mqtt_worker = mqtt_worker
+    monitor = ForecastMonitor(mqtt_worker.client)
+    task = asyncio.create_task(monitor.run()) if settings.ALERT_MONITOR_ENABLED else None
+    app.state.alert_monitor_task = task
+    try:
+        yield
+    finally:
+        monitor.stop()
+        if task is not None:
+            await task
+        logger.info("[SHUTDOWN] Dang dung MQTT Ingestion Worker...")
         mqtt_worker.stop()
-    logger.info("[SHUTDOWN] Tat ung dung thanh cong.")
+        app.state.mqtt_worker = None
+        app.state.alert_monitor_task = None
+        mqtt_worker = None
+        loop_ref = None
+        logger.info("[SHUTDOWN] Tat ung dung thanh cong.")
 
 
 openapi_tags = [
@@ -144,12 +159,14 @@ def health_check():
     """Kiểm tra tình trạng hoạt động của CSDL, MQTT Broker và các kênh WebSocket."""
     db_connected = check_db_connection()
     mqtt_connected = bool(mqtt_worker and mqtt_worker.client and mqtt_worker.client.is_connected())
+    monitor_task = getattr(app.state, "alert_monitor_task", None)
     return HealthCheckResponse(
         status="online" if db_connected else "degraded",
         service="IoT Weather Backend",
         database_connected=db_connected,
         mqtt_connected=mqtt_connected,
-        active_ws_clients=len(ws_manager.active_connections)
+        active_ws_clients=len(ws_manager.active_connections),
+        alert_monitor_running=bool(monitor_task is not None and not monitor_task.done()),
     )
 
 

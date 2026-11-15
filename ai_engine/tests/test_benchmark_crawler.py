@@ -284,6 +284,7 @@ def test_db_core_conflict_and_actual_insert_count(monkeypatch, record):
     [], ["--once", "--loop"], ["--once", "--backfill-days", "2"],
     ["--once", "--interval", "900"], ["--backfill-days", "93"],
     ["--loop", "--interval", "0"], ["--loop", "--interval", "nan"],
+    ["--loop-recent-15min", "--source", "openweather"],
     ["--once", "--lat", "91"],
 ])
 def test_cli_rejects_invalid_arguments(argv):
@@ -297,6 +298,18 @@ def test_cli_defaults():
     assert args.interval == 900
     assert args.source == "all"
     assert (args.lat, args.lon) == (10.762622, 106.660172)
+
+
+def test_recent_15min_loop_uses_recent_open_meteo(tmp_path, record):
+    args = parse_args(["--loop-recent-15min", "--interval", "900", "--csv",
+                       str(tmp_path / "reference.csv")])
+    crawler = Mock()
+    crawler.fetch_open_meteo_recent.return_value = [record]
+    assert args.source == "open-meteo"
+    assert run_cycle(args, crawler) == (1, 1)
+    crawler.fetch_open_meteo_recent.assert_called_once()
+    crawler.fetch_open_meteo_current.assert_not_called()
+    crawler.fetch_openweather_current.assert_not_called()
 
 
 def test_backfill_skips_current_openweather(tmp_path, record, caplog):

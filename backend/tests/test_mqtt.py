@@ -72,18 +72,20 @@ def test_mqtt_worker_payload_validation():
     data = MQTTIngestionWorker._parse_and_validate_payload(bad_payload)
     assert data is None
 
-    # 3. Payload có giá trị bất thường (clamp độ ẩm > 100%)
+    # 3. Giữ giá trị hữu hạn bất thường cho anomaly detector, không clamp.
     extreme_payload = json.dumps({
         "device_id": "station_extreme",
         "temperature": 95.0,  # Vượt ngưỡng bình thường nhưng vẫn ép kiểu float
-        "humidity": 125.0,    # Sẽ được clamp về 100.0%
-        "pressure": "invalid_press"  # Fallback về mặc định
+        "humidity": 125.0,
+        "pressure": 1000,
+        "rain_detected": 0,
     }).encode("utf-8")
 
     data = MQTTIngestionWorker._parse_and_validate_payload(extreme_payload)
     assert data is not None
-    assert data["humidity"] == 100.0
-    assert data["pressure"] == 1013.25
+    assert data["humidity"] == 125.0
+    assert data["pressure"] == 1000
+    assert MQTTIngestionWorker._parse_and_validate_payload(b'{"temperature": 30}') is None
 
 
 def test_mqtt_worker_db_ingestion():
@@ -107,7 +109,7 @@ def test_mqtt_worker_db_ingestion():
 
     # Tạo mock MQTT message
     class MockMsg:
-        topic = "weather/station01/data"
+        topic = f"{settings.MQTT_TOPIC_PREFIX}/{test_device_id}/data"
         payload = json.dumps(payload_dict).encode("utf-8")
 
     # Gọi trực tiếp handler _on_message

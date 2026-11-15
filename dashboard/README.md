@@ -1,4 +1,10 @@
 # MODULE 4: WEB SCADA REALTIME DASHBOARD
+
+Giao diện có ba màn hình với đường dẫn riêng: `/?view=forecast` cho thời tiết hiện tại, dự báo +10/+30/+60 phút và cảnh báo mưa; `/?view=observations` cho biểu đồ IoT/Open-Meteo; `/?view=station` cho sức khỏe linh kiện, đối chuẩn và lịch sử mưa. Các tham số `api` và `device` được giữ khi chuyển màn hình. Giao diện dùng tiếng Việt, hỗ trợ mobile, trạng thái mất kết nối/dữ liệu cũ, giảm chuyển động theo hệ điều hành và không dùng dữ liệu giả khi chạy thực tế.
+
+Biểu đồ dùng dữ liệu quan trắc thật trong 2 giờ gần nhất; Open-Meteo là chuỗi tham chiếu riêng. Để có đường Open-Meteo liên tục, chạy crawler từ thư mục `ai_engine`: `..\backend\.venv\Scripts\python.exe -m openweather_benchmark.crawler --loop-recent-15min --interval 900`. Giao diện tự tải lại dữ liệu đối chuẩn mỗi 10 phút. Nếu chưa có điểm tham chiếu, biểu đồ ghi rõ trạng thái đó. Bảng sức khỏe chỉ liệt kê các mục có dữ liệu kiểm chứng: ESP8266, BMP280, DHT11 và cảm biến mưa. OLED, relay, còi, LED và nguồn không có kênh phản hồi sức khỏe riêng nên không xuất hiện trong bảng.
+
+Kiểm tra nhanh phần giao diện không cần cài thêm thư viện: `node dashboard/js/app.test.cjs` (chạy từ thư mục gốc). Dashboard vẫn cần kết nối CDN để tải Tailwind và ApexCharts theo cấu trúc hiện có.
 ## Giao Diện Giám Sát Thời Gian Thực & Điều Khiển 2 Chiều
 
 > **Phụ trách chính:** 👤 **Thành viên 3 (AI + Analytics + Frontend Engineer)**  
@@ -99,11 +105,11 @@ Mặc định Dashboard gọi Backend tại **cùng host, cổng 8000** (`http:/
 | `WS /ws/weather/live` | realtime | Có | — |
 | `GET /api/weather/forecast?device_id=` | 15 s | Có | — |
 | `POST /api/weather/alerts/threshold` `{"threshold": 0.4–0.95}` | khi bấm nút | Có | — |
-| `GET /api/weather/alerts/threshold` → `{"threshold": 0.70}` | lúc mở trang | **Chưa có** | Thanh trượt giữ 70%, ghi "chưa biết ngưỡng hiện tại" |
-| `GET /api/weather/sensor-health?device_id=&window_minutes=360` → `{status, checked_at, anomalies[{type, sensor, message}]}` | 30 s | **Chưa có** (dùng `SensorAnomalyDetector.analyze()` của SA-03) | Badge `UNKNOWN` |
-| `GET /api/weather/benchmark?device_id=&source=open-meteo&hours=24` → `{reference[{timestamp, temperature, humidity, pressure}], latest_bias{temp_bias_c, ...} \| null}` | 10 phút | **Chưa có** (dữ liệu từ bảng `reference_weather` của SA-04) | Không có series tham chiếu, bias `N/A` |
+| `GET /api/weather/alerts/threshold` → `{"threshold": 0.70}` | lúc mở trang | **Có** | Thanh trượt giữ 70%, ghi "chưa biết ngưỡng hiện tại" |
+| `GET /api/weather/sensor-health?device_id=&window_minutes=360` → `{status, checked_at, anomalies[{type, sensor, message}]}` | 30 s | **Có** (dùng `SensorAnomalyDetector.analyze()` của SA-03) | Badge `UNKNOWN` |
+| `GET /api/weather/benchmark?device_id=&source=open-meteo-15min&hours=24` → `{reference[{timestamp, temperature, humidity, pressure}], latest_bias{temp_bias_c, ...} \| null}` | 10 phút | **Có** (dữ liệu từ bảng `reference_weather` của SA-04) | Không có series tham chiếu, bias `N/A` |
 
-Trường `rain_source` (`model` / `heuristic`) của mỗi horizon dự báo được hiển thị thành badge nếu `/forecast` trả về (hiện `ForecastResponse` của Backend đang lược bỏ trường này).
+Trường `rain_source` (`model` / `heuristic`) của mỗi horizon dự báo được hiển thị thành badge nếu `/forecast` trả về (Backend đã giữ trường này; heuristic được gắn nhãn rõ ràng).
 
 ---
 
@@ -114,3 +120,5 @@ Trường `rain_source` (`model` / `heuristic`) của mỗi horizon dự báo đ
 - [ ] Khung dự báo hiển thị đúng 3 mốc $+10$m, $+30$m, $+60$m và đổi màu cảnh báo (Đỏ/Vàng/Xanh) theo xác suất mưa.
 - [ ] Nút cập nhật ngưỡng cảnh báo mưa gửi thành công request `POST /api/weather/alerts/threshold` và nhận phản hồi `200 OK`.
 
+
+`sensor-health` trả `UNKNOWN` với lý do `stale_data` nếu mẫu cuối quá 120 giây; Dashboard hiển thị dữ liệu đã cũ. Dashboard dùng source `open-meteo-15min`, khớp bản ghi hiện tại do crawler `--once`/`--loop` lưu. Chạy crawler định kỳ 900 giây và lưu vào cùng DB với backend để có chuỗi tham chiếu. API vẫn hỗ trợ `source=open-meteo` cho backfill theo giờ (và giữ đây là mặc định khi bỏ tham số), cùng `source=openweather`; mỗi truy vấn chỉ lấy một source, không trộn hai độ phân giải. Muốn dashboard dùng lịch sử theo giờ thay cho crawler hiện tại, đổi `CONFIG.REF_SOURCE` trong `js/app.js` thành `open-meteo`.

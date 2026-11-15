@@ -103,6 +103,8 @@ ai_engine/reports/
 ml/data/
 
 # --- Embedded & C++ (PlatformIO / Arduino / ESP-IDF) ---
+firmware/include/config.h
+firmware/include/weather_config.h
 .pio/
 .pioenvs/
 .piolibdeps/

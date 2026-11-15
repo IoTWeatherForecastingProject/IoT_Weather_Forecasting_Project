@@ -294,7 +294,7 @@ check(forecast_5s.model_used != "Persistence", "IoT 5s: Chay model that tren du 
 short_span_records = iot_5s_records[:90]
 forecast_short = engine.predict(short_span_records)
 check(forecast_short.confidence == "fallback", "90 mau 5s (7.5 phut): Kich hoat fallback")
-check("Lịch sử dữ liệu chỉ dài" in (forecast_short.error_msg or "") or "không đủ" in (forecast_short.error_msg or ""), 
+check("Lịch sử dữ liệu chỉ dài" in (forecast_short.error_msg or "") or "không đủ" in (forecast_short.error_msg or ""),
       "90 mau 5s: error_msg ghi ro thoi gian lich su khong du")
 
 # 9.4: Kiểm tra tính toán Rolling Window không bị max(0, -w-1) bug (Review P2)
@@ -313,7 +313,7 @@ df_step = pd.DataFrame(step_change_records).set_index("timestamp")
 step_feat = engine._feature_engineer.transform_features(df_step)
 last_row = step_feat.iloc[-1]
 # Rolling 6m chỉ chứa các điểm 35°C (hoặc trung bình gần 35), trong khi rolling 60m chứa đa số 20°C
-check(abs(last_row["T_roll_mean_6m"] - last_row["T_roll_mean_60m"]) > 5.0, 
+check(abs(last_row["T_roll_mean_6m"] - last_row["T_roll_mean_60m"]) > 5.0,
       "Rolling 6m != Rolling 60m khi co step change (da sua bug max(0, -w-1))")
 
 # 9.5: Dữ liệu gián đoạn (sensor drop out 10 phút giữa chuỗi)

@@ -13,7 +13,7 @@ Ba nhóm lỗi phần cứng được phát hiện:
    - SPIKE: tốc độ thay đổi so với bản ghi trước vượt ngưỡng. Tốc độ tính theo
      khoảng thời gian thực giữa 2 bản ghi, với mẫu số tối thiểu 1 phút để nhiễu
      đo ở chu kỳ 5–10 s không bị khuếch đại thành spike giả.
-2. Giá trị bị kẹt (`detect_frozen_values`): BME280 trả về cùng một giá trị
+2. Giá trị bị kẹt (`detect_frozen_values`): BMP280/DHT11 trả về cùng một giá trị
    tuyệt đối trong suốt cửa sổ thời gian (treo I2C, đọc lại buffer cũ).
 3. Cảm biến mưa đọng nước (`detect_rain_sensor_drift`): báo ướt liên tục quá
    lâu trong khi độ ẩm đã thấp và áp suất không giảm.
@@ -216,7 +216,7 @@ class SensorAnomalyDetector:
         cls, df_history: pd.DataFrame, config: AnomalyConfig = DEFAULT_CONFIG
     ) -> Dict[str, Any]:
         """
-        Phát hiện cảm biến BME280 bị kẹt giá trị: trong `frozen_window_minutes` gần nhất,
+        Phát hiện cảm biến BMP280/DHT11 bị kẹt giá trị: trong `frozen_window_minutes` gần nhất,
         một đại lượng có biên độ dao động <= `frozen_tolerance`.
         Độ ẩm ở mức bão hòa (>= `frozen_hum_saturation`) được bỏ qua vì có thể đứng yên hợp lệ.
         """

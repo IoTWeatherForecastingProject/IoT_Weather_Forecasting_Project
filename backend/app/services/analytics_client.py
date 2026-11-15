@@ -9,7 +9,9 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from app.services.forecast_client import AI_ENGINE_PATH
+from pathlib import Path
+
+AI_ENGINE_PATH = Path(__file__).resolve().parents[3] / "ai_engine"
 
 logger = logging.getLogger(__name__)
 

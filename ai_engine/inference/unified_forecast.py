@@ -46,9 +46,9 @@ _temp_payload = None
 _rain_payload = None
 
 
-def _load_models():
+def _load_models(include_temperature: bool = True):
     global _temp_payload, _rain_payload
-    if _temp_payload is None and TEMP_MODEL_PATH.exists():
+    if include_temperature and _temp_payload is None and TEMP_MODEL_PATH.exists():
         try:
             _temp_payload = joblib.load(TEMP_MODEL_PATH)
         except Exception as e:
@@ -116,6 +116,45 @@ def _rain_model_probs(df: pd.DataFrame) -> Dict[int, Tuple[Optional[float], Opti
     return out
 
 
+def _rain_forecast_values(df: pd.DataFrame, clean_df: pd.DataFrame,
+                          cur_hum: float) -> Dict[int, Dict[str, Any]]:
+    """Keep valid model horizons and fill only missing ones with TV3 heuristic."""
+    result = {}
+    heuristic = None
+    for h, (prob, reason) in _rain_model_probs(df).items():
+        if prob is not None:
+            probability, source = round(prob, 2), "model"
+        else:
+            if heuristic is None:
+                heuristic = _heuristic_rain_probs(clean_df, cur_hum)
+            probability, source = heuristic[h], "heuristic"
+            if _rain_payload is not None:
+                logger.warning("[INFERENCE ENGINE] Mua +%dm dung heuristic: %s", h, reason)
+        result[h] = {
+            "rain_probability": probability,
+            "rain_source": source,
+            "rain_level": "High" if probability >= 0.70 else "Medium" if probability >= 0.30 else "Low",
+        }
+    return result
+
+
+def predict_rain_forecast(recent_data: Union[pd.DataFrame, list]) -> Dict[int, Dict[str, Any]]:
+    """TV3 rain-only boundary for the backend's TV2/TV3 composition adapter.
+
+    It deliberately does not load or run the obsolete temperature artifact.
+    Each horizon retains its own model/heuristic source.
+    """
+    df = pd.DataFrame(recent_data).copy()
+    if df.empty:
+        raise ValueError("recent_data khong duoc de trong")
+    latest = df.iloc[-1]
+    if "device_id" in df.columns:
+        df = df[df["device_id"].astype(str) == str(latest["device_id"])]
+    _load_models(include_temperature=False)
+    clean_df = TimeSeriesPreprocessor(freq="1min").clean_and_resample(df)
+    return _rain_forecast_values(df, clean_df, float(latest["humidity"]))
+
+
 def predict_forecast(recent_data: Union[pd.DataFrame, list],
                      threshold: float = DEFAULT_RAIN_ALERT_THRESHOLD) -> Dict[str, Any]:
     """
@@ -179,20 +218,9 @@ def predict_forecast(recent_data: Union[pd.DataFrame, list],
 
     # Dự báo Xác suất Mưa (+10m, +30m, +60m): giữ kết quả model hợp lệ của từng horizon,
     # chỉ horizon không có dự báo từ model mới dùng heuristic
-    forecast_rain_probs = {}
-    rain_sources = {}
-    heuristic = None
-    for h, (prob, reason) in _rain_model_probs(df).items():
-        if prob is not None:
-            forecast_rain_probs[h] = round(prob, 2)
-            rain_sources[h] = "model"
-            continue
-        if heuristic is None:
-            heuristic = _heuristic_rain_probs(clean_df, cur_hum)
-        forecast_rain_probs[h] = heuristic[h]
-        rain_sources[h] = "heuristic"
-        if _rain_payload is not None:
-            logger.warning("[INFERENCE ENGINE] Mua +%dm dung heuristic: %s", h, reason)
+    rain = _rain_forecast_values(df, clean_df, cur_hum)
+    forecast_rain_probs = {h: values["rain_probability"] for h, values in rain.items()}
+    rain_sources = {h: values["rain_source"] for h, values in rain.items()}
 
     def get_rain_level(prob: float) -> str:
         if prob >= 0.70:

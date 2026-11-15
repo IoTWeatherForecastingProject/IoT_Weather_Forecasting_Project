@@ -13,6 +13,7 @@ import random
 import sys
 import time
 from datetime import datetime, timezone
+
 import paho.mqtt.client as mqtt
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -46,12 +47,14 @@ def on_message(client, userdata, msg):
             payload.get("probability", 0) * 100,
             payload.get("action", {}).get("oled_message", "ALERT")
         )
-    except Exception as e:
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError, AttributeError) as e:
         logger.error("Loi doc payload canh bao: %s", e)
 
 
 def run_simulator(broker: str, port: int, interval: int, simulate_rain: bool, simulate_anomaly: bool,
-                  username: str = "weather_admin", password: str = "weather_secure_pass_2026"):
+                  username: str = "weather_admin", password: str = "weather_secure_pass_2026",
+                  adc_bits: int = 10):
+    adc_max = (1 << adc_bits) - 1
     client = mqtt.Client(client_id="mock_esp_weather_station", clean_session=True)
     if username and password:
         client.username_pw_set(username, password)
@@ -62,7 +65,7 @@ def run_simulator(broker: str, port: int, interval: int, simulate_rain: bool, si
     try:
         client.connect(broker, port, keepalive=60)
         client.loop_start()
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.error("Khong the ket noi toi Broker: %s. Hay dam bao docker-compose up -d da chay!", e)
         return
 
@@ -82,7 +85,7 @@ def run_simulator(broker: str, port: int, interval: int, simulate_rain: bool, si
                 temp = 62.0
                 hum = cur_hum
                 press = 880.0
-                rain_raw = 2800
+                rain_raw = round(adc_max * 0.68)
                 rain_detected = 0
                 logger.warning(">>> BAN DU LIEU ANOMALY / SPIKE (Temp: 62°C, Press: 880 hPa)")
             elif simulate_rain:
@@ -90,14 +93,17 @@ def run_simulator(broker: str, port: int, interval: int, simulate_rain: bool, si
                 temp = round(max(24.0, cur_temp - 0.2 * step), 2)
                 hum = round(min(96.0, cur_hum + 1.5 * step), 2)
                 press = round(max(998.0, cur_press - 0.4 * step), 2)
-                rain_raw = random.randint(700, 1100)
                 rain_detected = 1 if step >= 3 else 0
+                if rain_detected:
+                    rain_raw = random.randint(round(adc_max * 0.17), round(adc_max * 0.27))
+                else:
+                    rain_raw = round(adc_max * 0.68)
             else:
                 # Dao dong tu nhien binh thuong
                 temp = round(cur_temp + random.uniform(-0.15, 0.15), 2)
                 hum = round(min(100.0, max(40.0, cur_hum + random.uniform(-0.4, 0.4))), 2)
                 press = round(cur_press + random.uniform(-0.1, 0.1), 2)
-                rain_raw = random.randint(2600, 2900)
+                rain_raw = random.randint(round(adc_max * 0.64), round(adc_max * 0.71))
                 rain_detected = 0
 
             payload = {
@@ -128,6 +134,8 @@ if __name__ == "__main__":
     parser.add_argument("--broker", default="localhost", help="Dia chi MQTT Broker")
     parser.add_argument("--port", type=int, default=1883, help="Cong MQTT Broker")
     parser.add_argument("--interval", type=int, default=5, help="Chu ky phat du lieu (giay)")
+    parser.add_argument("--adc-bits", type=int, choices=(10, 12), default=10,
+                        help="ADC: 10-bit ESP8266 (mac dinh), 12-bit ESP32")
     parser.add_argument("--username", default="weather_admin", help="MQTT Username")
     parser.add_argument("--password", default="weather_secure_pass_2026", help="MQTT Password")
     parser.add_argument("--simulate-rain", action="store_true", help="Kich hoat kich ban mua dong tut ap")
@@ -135,5 +143,5 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     run_simulator(args.broker, args.port, args.interval, args.simulate_rain, args.simulate_anomaly,
-                  args.username, args.password)
+                  args.username, args.password, args.adc_bits)
 
