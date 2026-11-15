@@ -1,0 +1,9 @@
+# Optional runtime for the committed ml/models artifacts; Python >=3.12.
+# Keep sklearn/XGBoost equal to the versions embedded in the delivered pickles.
+# Training, plotting and PyTorch remain in ml/requirements.txt.
+numpy>=1.26,<3
+pandas>=2.2,<4
+scipy>=1.10
+joblib>=1.4,<2
+scikit-learn==1.9.1
+xgboost==3.4.1

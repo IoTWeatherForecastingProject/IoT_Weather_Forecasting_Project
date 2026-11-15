@@ -51,8 +51,10 @@ ai_engine/
 │   ├── features.py                 # Lag features, rolling statistics, cyclic time sine/cosine
 │   └── train_temperature.py        # Huấn luyện Baseline, RF, XGBoost; tính MAE, RMSE, R2
 ├── rain_classification/            # [TV3] Dự báo xác suất mưa
-│   ├── features.py                 # Tốc độ tụt áp Delta P, tăng ẩm Delta H
-│   └── train_rain.py               # Huấn luyện phân loại, Isotonic/Platt calibration, Brier score
+│   ├── features.py                 # Lưới thời gian nhân quả, Delta P, Delta H, nhãn mưa tương lai
+│   ├── calibration.py              # Platt (sigmoid) / Isotonic calibrator, CalibratedRainModel
+│   ├── evaluation.py               # Chia train/calib/test theo thời gian, baseline, Brier/BSS, reliability
+│   └── train_rain.py               # Pipeline huấn luyện + hiệu chuẩn + đánh giá, lưu artifact
 ├── sensor_analytics/               # [TV3] Phân tích dị thường cảm biến
 │   └── anomaly_detector.py         # Phát hiện spike bất thường và kẹt giá trị (frozen value)
 ├── openweather_benchmark/          # [TV3] Đối chuẩn trạm khí tượng
@@ -60,6 +62,8 @@ ai_engine/
 ├── inference/                      # [TV2] Unified Forecast Inference Engine
 │   └── unified_forecast.py         # Hàm predict_forecast() chuẩn hóa bàn giao cho Backend TV1
 ├── saved_models/                   # Weights đã lưu (.joblib)
+├── reports/                        # Báo cáo đánh giá sinh tự động (.gitignore)
+├── tests/                          # Unit test (pytest), chạy từ thư mục ai_engine/
 └── notebooks/                      # [TV2 & TV3] Jupyter Notebooks vẽ biểu đồ báo cáo đồ án
 ```
 
@@ -87,19 +91,25 @@ ai_engine/
    - Trích xuất đặc trưng vật lý khí quyển: Tốc độ tụt áp ($\Delta P/\Delta t$), tốc độ tăng ẩm ($\Delta H/\Delta t$).
    - Xử lý mất cân bằng lớp (Imbalanced dataset) bằng `class_weight='balanced'`.
 2. **Hiệu chuẩn Xác suất (Probability Calibration):**
-   - Sử dụng **Isotonic Regression** hoặc **Platt Scaling** (`CalibratedClassifierCV`).
-   - Đánh giá bằng **Brier Score** ($< 0.15$) và vẽ đường cong **Calibration Curve**.
+   - Sử dụng **Platt Scaling (sigmoid)** hoặc **Isotonic Regression**, fit trên tập calibration tách theo thời gian (xem mục 4.1).
+   - Đánh giá bằng **Brier Score**, Brier Skill Score so với baseline và **Reliability Diagram**.
 3. **Phát hiện Bất thường Cảm biến (`sensor_analytics/`):**
-   - Bắt các spike phi lý (Nhiệt độ $> 55^\circ$C hoặc Áp suất $< 900$ hPa).
-   - Bắt lỗi kẹt nước (Frozen value): Cảm biến mưa báo ướt liên tục quá 6 tiếng khi độ ẩm môi trường đã giảm xuống dưới 65%.
+   - Bản ghi đơn lẻ: thiếu giá trị, vượt giới hạn vật lý (5–55 °C, 10–100 %, 950–1050 hPa) và spike theo tốc độ thay đổi thực ($|\Delta x| / \max(\Delta t, 1\text{ phút})$; bỏ qua khi mất dữ liệu > 10 phút).
+   - Frozen value BMP280/DHT11: một đại lượng không đổi suốt 30 phút (bỏ qua độ ẩm bão hòa ≥ 99%). DHT11 có độ phân giải thô nên giá trị lặp có thể hợp lệ; đối chiếu log và hiệu chỉnh ngưỡng trước khi kết luận cảm biến hỏng.
+   - Đọng nước cảm biến mưa: báo ướt ở mọi mẫu trong 6 giờ, độ ẩm trung bình < 65% và áp suất không giảm quá 0.5 hPa.
+   - Mọi cửa sổ tính theo `timestamp`, không theo số dòng. `SensorAnomalyDetector.analyze(df)` trả báo cáo tổng hợp `status` = `OK` / `WARNING` / `FAULT` cho Dashboard. Ngưỡng cấu hình qua `AnomalyConfig`.
 4. **Đối chuẩn Khí tượng (`openweather_benchmark/`):**
-   - Định kỳ lấy dữ liệu OpenWeatherMap tại cùng tọa độ trạm đo để phân tích Mean Bias Error (MBE).
+   - Thu thập Open-Meteo hiện tại/lịch sử 1–92 ngày và OpenWeather hiện tại (khi có `OPENWEATHER_API_KEY`) tại cùng tọa độ trạm đo. Các tham số đã đối chiếu với [tài liệu Open-Meteo](https://open-meteo.com/en/docs).
+   - Chuẩn hóa `source, timestamp, lat, lon, temperature, humidity, pressure, precipitation`; timestamp dữ liệu từ nguồn được lưu UTC, áp suất dùng `surface_pressure` hoặc ưu tiên `grnd_level` của OpenWeather. Dữ liệu Open-Meteo là dữ liệu mô hình, không phải phép đo trực tiếp tại trạm.
+   - Giá trị `source`: `open-meteo` (theo giờ, từ `--backfill-days`), `open-meteo-15min` (giá trị 15 phút, từ `--once`/`--loop`), `openweather`. Hai độ phân giải của Open-Meteo được tách để không ghi đè nhau ở các mốc giờ chẵn.
+   - Lưu CSV hoặc bảng `reference_weather`, khử trùng theo `(source, timestamp)`. Giữ `WeatherBenchmarkCrawler.calculate_sensor_bias()` để tương thích code cũ.
+   - Phân tích sai số (`bias_analysis.py`): với mỗi mốc tham chiếu $t$, lấy trung bình IoT trong $[t-5\text{m}, t+5\text{m}]$ (riêng từng biến, cần ≥ 3 mẫu). Sai số $e = \text{IoT} - \text{ref}$; báo cáo `n`, MBE $=\bar e$, MAE, RMSE, độ lệch chuẩn của $e$, Pearson $r$, hồi quy hiệu chỉnh $\text{ref} \approx a\cdot\text{IoT} + b$, và MBE theo giờ trong ngày (Asia/Ho_Chi_Minh) để thấy ảnh hưởng của nắng lên hộp trạm. Không có dữ liệu chung → `reason` = `no_iot_data` / `no_reference_data` / `no_overlap`. Phần ghép chuỗi (`align_series`) nằm trong `alignment.py`, chỉ dùng numpy/pandas, nên Backend dùng được mà không cần cài `requests` của crawler.
 
 ---
 
 ## 4. Chuẩn Giao diện Đầu ra của Inference Engine (Unified Contract)
 
-Hàm `predict_forecast(recent_data)` trong `inference/unified_forecast.py` bắt buộc trả về định dạng sau để Backend TV1 không bị lỗi:
+Hàm `predict_forecast(recent_data, threshold=0.70)` trong `inference/unified_forecast.py` bắt buộc trả về định dạng sau để Backend TV1 không bị lỗi. `threshold` là ngưỡng cảnh báo mưa dùng cho `alert_triggered`; mỗi horizon có thêm `rain_source` (`"model"` hoặc `"heuristic"`), trường này bị `ForecastResponse` của backend bỏ qua nên không ảnh hưởng API hiện tại.
 
 ```json
 {
@@ -111,22 +121,52 @@ Hàm `predict_forecast(recent_data)` trong `inference/unified_forecast.py` bắt
   "plus_10m": {
     "temperature_c": 31.0,
     "rain_probability": 0.25,
-    "rain_level": "Low"
+    "rain_level": "Low",
+    "rain_source": "model"
   },
   "plus_30m": {
     "temperature_c": 30.4,
     "rain_probability": 0.62,
-    "rain_level": "Medium"
+    "rain_level": "Medium",
+    "rain_source": "model"
   },
   "plus_60m": {
     "temperature_c": 29.6,
     "rain_probability": 0.84,
-    "rain_level": "High"
+    "rain_level": "High",
+    "rain_source": "model"
   },
   "alert_triggered": true,
   "alert_message": "Canh bao xac suat mua cao trong 60 phut toi!"
 }
 ```
+
+### 4.1. Mô hình xác suất mưa (SA-01 / SA-02): định nghĩa, đánh giá và artifact
+
+**Nhãn.** Với horizon $h \in \{10, 30, 60\}$ phút: `target_rain_{h}m(t) = 1` nếu `rain_detected = 1` tại bất kỳ mốc nào trong $(t, t+h]$ — **không tính thời điểm $t$**. Nhãn là `0` chỉ khi đã quan sát đủ toàn bộ cửa sổ; nếu thiếu dữ liệu tương lai (đuôi chuỗi, mất mẫu) thì nhãn là `NaN` và mẫu bị loại.
+
+**Feature chỉ dùng quá khứ.** Dữ liệu được resample về lưới 1 phút theo bin $(t-1\text{m}, t]$; mất mẫu chỉ được forward-fill tối đa 2 bước, không nội suy/backward-fill. Feature: `temperature, humidity, pressure, dew_point_approx, press_diff_{15,30,60}m, hum_diff_{15,30,60}m, temp_diff_30m` và trạng thái cảm biến mưa tại $t$ (`rain_detected, rain_raw, rain_raw_roll_mean_10m`). Trạng thái mưa hiện tại là hợp lệ vì nhãn chỉ thuộc tương lai; mô hình luôn được so với baseline persistence để thấy nó có thêm giá trị hay không (`--exclude-rain-state` để chạy ablation).
+
+**Chia dữ liệu.** Train/calibration/test = 70/15/15 theo thời gian, không shuffle. Mẫu cuối mỗi tập có $t + h$ chạm ranh giới kế tiếp bị loại (purge). Model chỉ fit trên train, calibrator chỉ fit trên calibration; test chỉ để báo cáo (không dùng chọn phương pháp hay ngưỡng). Phương pháp triển khai do cấu hình quy định (`--calibration`, mặc định `sigmoid`); isotonic cần ≥ 100 mẫu calibration.
+
+**Đánh giá trên test (từng horizon).** Số mẫu, khoảng thời gian, tỷ lệ mưa từng tập; Brier; ROC-AUC và PR-AUC (= *average precision* của scikit-learn, không nội suy hình thang) khi đủ 2 lớp; baseline **climatology** (P = tỷ lệ mưa của tập train) và **persistence** (P = 1 nếu `rain_detected(t) = 1`, ngược lại 0); Brier Skill Score $= 1 - BS/BS_{ref}$ với cả hai baseline (không xác định khi $BS_{ref} = 0$); reliability diagram trước/sau calibration kèm số mẫu mỗi bin.
+
+**Khi dữ liệu không đủ.** Tập train < 5 mẫu mỗi lớp → bỏ horizon. Tập calibration < 5 mẫu mỗi lớp → không fit được calibrator → horizon **không** được đưa vào artifact (trừ khi chạy `--allow-uncalibrated`). Dữ liệu < 7 ngày được đánh dấu `technical_check_only`: kết quả chỉ để kiểm tra kỹ thuật, chưa chứng minh chất lượng dự báo.
+
+> Dữ liệu mẫu `data/sample/sample_weather_data.csv` chỉ có 1 ngày và 1 trận mưa (15:10–16:20 UTC) nằm trong tập train; tập calibration/test không có mưa nên hiện chưa horizon nào đủ điều kiện triển khai. Cần dữ liệu thực tế nhiều ngày có nhiều trận mưa.
+
+**Artifact** `saved_models/rain_classifier_models.joblib` (giữ các khóa `models`, `feature_cols`, `horizons` mà `inference/unified_forecast.py` đang dùng; mỗi model có `predict_proba` như sklearn) bổ sung: `artifact_version`, `deployed_horizons`, `target_definition`, `freq`, `ffill_limit_steps`, `min_history_minutes`, `recommended_history_minutes`, `input_columns`, `calibration` (phương pháp/trạng thái từng horizon), `training_config`, `data_summary`, `split_boundaries`, `library_versions`. Model **từ chối dự đoán (ValueError)** nếu thiếu cột hoặc feature có NaN (không đủ lịch sử).
+
+### 4.2. Yêu cầu interface cần phối hợp (TV1 / TV2)
+
+| # | Yêu cầu | Bên phụ trách | Trạng thái |
+|---|---|---|---|
+| 1 | `/forecast` truy vấn dữ liệu theo **khoảng thời gian**, không theo số bản ghi: tối thiểu `min_history_minutes` = 61 phút, khuyến nghị `recommended_history_minutes` = 76 phút (dự phòng mất mẫu/lệch bin). | TV1 | Đã triển khai cục bộ: lấy toàn bộ mẫu 76 phút gần nhất, bỏ timestamp tương lai; trả 404 nếu không có mẫu gần đây. Metadata lịch sử và `rain_source` được giữ trong API. Chờ review/merge BE-05. |
+| 2 | Đầu vào: `timestamp` (UTC ISO-8601, thời điểm đo của thiết bị), `temperature` (°C), `humidity` (%), `pressure` (hPa, áp suất tại trạm — không quy về mực nước biển), `rain_detected` (0/1), `rain_raw` (ADC, bắt buộc nếu có trong `input_columns` của artifact). Một `device_id` mỗi lần gọi. | TV1 | Đã triển khai cục bộ: lọc đúng một trạm; không truyền ID thì chọn trạm có mẫu mới nhất trong cửa sổ. Firmware hiện gửi uptime nên timestamp lưu DB là thời điểm backend nhận; simulator có gửi UTC. Chờ review/merge BE-05. |
+| 3 | Thiếu lịch sử hoặc thiếu model một horizon: chỉ horizon đó không có dự báo; **giữ nguyên kết quả model hợp lệ của các horizon còn lại** và log rõ lý do. Hiện `unified_forecast.py` thay **cả 3** horizon bằng heuristic khi thiếu 1 horizon và dùng `print`. | TV2 | Đã làm (`_rain_model_probs`, `rain_source`) |
+| 4 | Feature mưa nên dựng bằng `rain_classification.features.resample_to_grid()` + `extract_rain_features()` để khớp lúc train (bin $(t-1\text{m}, t]$, không nội suy). `TimeSeriesPreprocessor.clean_and_resample` dùng bin $[t, t+1\text{m})$ + nội suy/bfill nên lệch nhẹ so với lúc train. | TV2 | Đã làm |
+| 5 | `alert_triggered` cần nhận ngưỡng từ `system_config` (tham số `threshold`) thay vì cố định 0.70. | TV2 + TV1 | AI và Backend đã truyền `threshold`; fallback dùng cùng ngưỡng. Chờ review/merge BE-05. |
+| 6 | Khối `except` trong `unified_forecast.py` dùng `print` tiếng Việt có dấu: trên console Windows (cp1258) chính lệnh `print` ném `UnicodeEncodeError` khi model mưa từ chối dự đoán do thiếu lịch sử. Cần chuyển sang `logging`. | TV2 | Đã làm |
 
 ---
 
@@ -143,10 +183,47 @@ pip install -r requirements.txt
 python temperature_forecasting/train_temperature.py
 
 # 2. Chạy huấn luyện và hiệu chuẩn mô hình xác suất mưa (TV3)
-python rain_classification/train_rain.py
+python rain_classification/train_rain.py                    # dữ liệu mẫu, calibration sigmoid
+python rain_classification/train_rain.py --data data/raw/station01.csv --calibration isotonic
+#    Tùy chọn: --device-id, --exclude-rain-state (ablation), --allow-uncalibrated (chỉ demo kỹ thuật)
+#    Kết quả: saved_models/rain_classifier_models.joblib, reports/rain_classification/*.json|png
 
 # 3. Chạy kiểm thử hàm suy luận hợp nhất (TV2 & TV3)
 python inference/unified_forecast.py
+
+# 4. Unit test (dữ liệu tổng hợp, không dùng làm kết quả thực nghiệm)
+python -m pytest
+
+# 5. Crawler tham chiếu: CSV không cần DB hoặc OpenWeather key
+python -m openweather_benchmark.crawler --once --csv data/processed/reference.csv
+python -m openweather_benchmark.crawler --loop --interval 900 --source open-meteo --csv data/processed/reference.csv
+
+# Áp dụng backend/migrations/002_reference_weather.sql trước khi lưu PostgreSQL
+# DATABASE_URL ưu tiên biến môi trường, sau đó backend/.env
+python -m openweather_benchmark.crawler --backfill-days 2
+python -m openweather_benchmark.crawler --once
+
+# 6. Phân tích sai số IoT vs tham chiếu (mặc định đọc DB; hoặc dùng CSV)
+python -m openweather_benchmark.bias_analysis --device-id station01 --source open-meteo
+python -m openweather_benchmark.bias_analysis --iot-csv data/raw/station01.csv --ref-csv data/processed/reference.csv
+#    Tùy chọn: --start/--end (ISO-8601), --tolerance-minutes 5, --min-samples 3, --out-dir
+#    Kết quả: reports/benchmark/<device>_<source>/bias_summary.json, aligned_pairs.csv, scatter_*.png, timeseries_*.png, diurnal_bias.png
+```
+
+Chọn đúng một trong `--once`, `--loop`, `--backfill-days N`; `--interval` chỉ dùng
+với `--loop`. Tọa độ mặc định `10.762622, 106.660172`, thay bằng `--lat`/`--lon`.
+`--source` nhận `all` (mặc định), `open-meteo`, `openweather`; không có key thì bỏ
+qua OpenWeather. Backfill chỉ lấy Open-Meteo vì endpoint OpenWeather hiện tại
+không cung cấp lịch sử. Mỗi yêu cầu có tổng cộng 4 lần thử (timeout 10 giây), chờ
+2/4/8 giây giữa các lần; lỗi 4xx (trừ 429) dừng ngay. Kết nối DB có `connect_timeout`
+10 giây. Ở `--once`/`--backfill-days`, exit code 1 khi không lấy được bản ghi nào hoặc
+lưu thất bại (log nêu rõ nguyên nhân, đã ẩn mật khẩu); `--loop` ghi log rồi chạy tiếp.
+
+Nâng cấp dữ liệu đã crawl trước khi tách `open-meteo-15min` (chạy một lần):
+
+```sql
+UPDATE reference_weather SET source = 'open-meteo-15min'
+WHERE source = 'open-meteo' AND date_part('minute', timestamp) <> 0;
 ```
 
 ---

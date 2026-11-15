@@ -1,4 +1,10 @@
 # MODULE 4: WEB SCADA REALTIME DASHBOARD
+
+Giao diện có ba màn hình với đường dẫn riêng: `/?view=forecast` cho thời tiết hiện tại, dự báo +10/+30/+60 phút và cảnh báo mưa; `/?view=observations` cho biểu đồ IoT/Open-Meteo; `/?view=station` cho sức khỏe linh kiện, đối chuẩn và lịch sử mưa. Các tham số `api` và `device` được giữ khi chuyển màn hình. Giao diện dùng tiếng Việt, hỗ trợ mobile, trạng thái mất kết nối/dữ liệu cũ, giảm chuyển động theo hệ điều hành và không dùng dữ liệu giả khi chạy thực tế.
+
+Biểu đồ dùng dữ liệu quan trắc thật trong 2 giờ gần nhất; Open-Meteo là chuỗi tham chiếu riêng. Để có đường Open-Meteo liên tục, chạy crawler từ thư mục `ai_engine`: `..\backend\.venv\Scripts\python.exe -m openweather_benchmark.crawler --loop-recent-15min --interval 900`. Giao diện tự tải lại dữ liệu đối chuẩn mỗi 10 phút. Nếu chưa có điểm tham chiếu, biểu đồ ghi rõ trạng thái đó. Bảng sức khỏe chỉ liệt kê các mục có dữ liệu kiểm chứng: ESP8266, BMP280, DHT11 và cảm biến mưa. OLED, relay, còi, LED và nguồn không có kênh phản hồi sức khỏe riêng nên không xuất hiện trong bảng.
+
+Kiểm tra nhanh phần giao diện không cần cài thêm thư viện: `node dashboard/js/app.test.cjs` (chạy từ thư mục gốc). Dashboard vẫn cần kết nối CDN để tải Tailwind và ApexCharts theo cấu trúc hiện có.
 ## Giao Diện Giám Sát Thời Gian Thực & Điều Khiển 2 Chiều
 
 > **Phụ trách chính:** 👤 **Thành viên 3 (AI + Analytics + Frontend Engineer)**  
@@ -70,21 +76,49 @@ Bạn chỉ cần nhấp đúp chuột vào tệp `index.html` hoặc mở bằn
 2. Nhấp chuột phải vào `dashboard/index.html` $\rightarrow$ chọn **Open with Live Server**.
 3. Dashboard sẽ mở tại địa chỉ `http://127.0.0.1:5500/dashboard/index.html`.
 
-### Cấu hình Địa chỉ Backend
-Trong tệp `js/app.js`, bạn có thể tùy chỉnh địa chỉ Backend nếu chạy trên máy khác:
-```javascript
-const CONFIG = {
-    WS_URL: "ws://localhost:8000/ws/weather/live",
-    API_BASE: "http://localhost:8000/api/weather"
-};
+### Cách 3: Python http.server
+```bash
+cd dashboard && python -m http.server 5500     # mở http://localhost:5500/
 ```
+
+### Cấu hình Địa chỉ Backend
+Mặc định Dashboard gọi Backend tại **cùng host, cổng 8000** (`http://<host>:8000`, WebSocket `ws://<host>:8000/ws/weather/live`). Không cần sửa code, dùng tham số URL:
+
+| Tham số | Ví dụ | Ý nghĩa |
+|---|---|---|
+| `api` | `?api=http://192.168.1.10:8000` | Địa chỉ Backend khi chạy trên máy khác |
+| `device` | `?device=station02` | Mã trạm cần theo dõi (mặc định `station01`) |
+
+### Nguyên tắc hiển thị
+- **Không có dữ liệu giả.** Backend tắt → header hiện `MẤT KẾT NỐI BACKEND`, các thẻ hiện `--`. `/current` trả `status = "waiting_data"` (DB trống) → thẻ hiện `CHỜ DỮ LIỆU`.
+- Biểu đồ trục thời gian theo `timestamp` của bản ghi, giữ 2 giờ gần nhất (nạp từ `/history`, nối thêm điểm từ WebSocket, vẽ lại tối đa 1 lần/giây). Tab chọn Nhiệt độ / Độ ẩm / Áp suất.
+- Xu hướng áp suất = ΔP so với điểm cách ~60 phút, quy về hPa/giờ (cần ≥ 45 phút dữ liệu); giảm ≥ 1 hPa/h → `Đang giảm` (màu vàng).
+- WebSocket tự kết nối lại với backoff 1 → 2 → 4 … tối đa 30 giây; chỉ nhận payload có `device_id` đúng trạm đang xem.
+- Dữ liệu từ server luôn gán bằng `textContent` (không `innerHTML`).
+
+### Endpoint Dashboard sử dụng
+
+| Endpoint | Chu kỳ | Trạng thái Backend | Khi chưa có (404/405) |
+|---|---|---|---|
+| `GET /api/weather/current?device_id=` | lúc mở trang | Có | — |
+| `GET /api/weather/history?device_id=&start_time=&limit=1000&offset=` | lúc mở trang | Có | — |
+| `WS /ws/weather/live` | realtime | Có | — |
+| `GET /api/weather/forecast?device_id=` | 15 s | Có | — |
+| `POST /api/weather/alerts/threshold` `{"threshold": 0.4–0.95}` | khi bấm nút | Có | — |
+| `GET /api/weather/alerts/threshold` → `{"threshold": 0.70}` | lúc mở trang | **Có** | Thanh trượt giữ 70%, ghi "chưa biết ngưỡng hiện tại" |
+| `GET /api/weather/sensor-health?device_id=&window_minutes=360` → `{status, checked_at, anomalies[{type, sensor, message}]}` | 30 s | **Có** (dùng `SensorAnomalyDetector.analyze()` của SA-03) | Badge `UNKNOWN` |
+| `GET /api/weather/benchmark?device_id=&source=open-meteo-15min&hours=24` → `{reference[{timestamp, temperature, humidity, pressure}], latest_bias{temp_bias_c, ...} \| null}` | 10 phút | **Có** (dữ liệu từ bảng `reference_weather` của SA-04) | Không có series tham chiếu, bias `N/A` |
+
+Trường `rain_source` (`model` / `heuristic`) của mỗi horizon dự báo được hiển thị thành badge nếu `/forecast` trả về (Backend đã giữ trường này; heuristic được gắn nhãn rõ ràng).
 
 ---
 
 ## 5. Tiêu chí Hoàn thành (DoD)
 
 - [ ] Dashboard kết nối thành công WebSocket tới Backend và tự động kết nối lại khi Backend khởi động lại.
-- [ ] Biểu đồ chuỗi thời gian vẽ mượt mà, hỗ trợ zoom/pan và cập nhật theo thời gian thực.
+- [ ] Biểu đồ chuỗi thời gian vẽ mượt mà theo timestamp thật và cập nhật theo thời gian thực.
 - [ ] Khung dự báo hiển thị đúng 3 mốc $+10$m, $+30$m, $+60$m và đổi màu cảnh báo (Đỏ/Vàng/Xanh) theo xác suất mưa.
 - [ ] Nút cập nhật ngưỡng cảnh báo mưa gửi thành công request `POST /api/weather/alerts/threshold` và nhận phản hồi `200 OK`.
 
+
+`sensor-health` trả `UNKNOWN` với lý do `stale_data` nếu mẫu cuối quá 120 giây; Dashboard hiển thị dữ liệu đã cũ. Dashboard dùng source `open-meteo-15min`, khớp bản ghi hiện tại do crawler `--once`/`--loop` lưu. Chạy crawler định kỳ 900 giây và lưu vào cùng DB với backend để có chuỗi tham chiếu. API vẫn hỗ trợ `source=open-meteo` cho backfill theo giờ (và giữ đây là mặc định khi bỏ tham số), cùng `source=openweather`; mỗi truy vấn chỉ lấy một source, không trộn hai độ phân giải. Muốn dashboard dùng lịch sử theo giờ thay cho crawler hiện tại, đổi `CONFIG.REF_SOURCE` trong `js/app.js` thành `open-meteo`.

@@ -8,12 +8,14 @@
 [![MQTT](https://img.shields.io/badge/Protocol-MQTT%20QoS%201-orange.svg)](https://mqtt.org/)
 [![ESP32/ESP8266](https://img.shields.io/badge/Hardware-ESP32%20%2F%20ESP8266-red.svg)](https://www.espressif.com/)
 
+**Phần cứng đã chốt:** NodeMCU ESP8266 Amica, BMP280 đo nhiệt độ/áp suất, DHT11 đo độ ẩm, cảm biến mưa AO, OLED SH1106 1,3 inch, relay 5V đóng/cắt còi 5V và LED. Cấp nguồn cho NodeMCU qua USB 5V; xem [danh sách mua và lưu ý cấp nguồn](docs/hardware_shopping_list.md).
+
 ---
 
 ## 1. Tổng quan Dự án (Project Overview)
 
 Dự án phát triển một hệ thống IoT hoàn chỉnh khép kín từ tầng biên (Edge Sensing) đến máy chủ đám mây (Cloud Backend) và tầng ra quyết định (AI Forecasting & Actuation):
-1. **Thu thập dữ liệu môi trường cục bộ:** Đo lường Nhiệt độ (°C), Độ ẩm (%), Áp suất khí quyển (hPa) qua cảm biến BME280 và lượng mưa qua Cảm biến mưa (Rain Sensor).
+1. **Thu thập dữ liệu môi trường cục bộ:** Đo nhiệt độ (°C) và áp suất khí quyển (hPa) qua BMP280, độ ẩm (%) qua DHT11 và phát hiện nước mưa bằng Rain Sensor.
 2. **Truyền dẫn tin cậy:** Sử dụng vi điều khiển ESP8266/ESP32 truyền dữ liệu JSON qua giao thức MQTT với cơ chế Auto-reconnect và đo đạc chất lượng dịch vụ (QoS).
 3. **Lưu trữ chuỗi thời gian tối ưu:** Lưu trữ dữ liệu vào CSDL PostgreSQL / TimescaleDB với Composite Index phục vụ truy vấn cửa sổ trượt (Sliding Window).
 4. **Dự báo thời tiết ngắn hạn (Time Series AI):**
@@ -30,14 +32,14 @@ Dự án phát triển một hệ thống IoT hoàn chỉnh khép kín từ tầ
 ```mermaid
 flowchart TD
     subgraph IoT_Station["TRẠM ĐO IOT NGOÀI TRỜI (TV1)"]
-        Sensors["Cảm biến (BME280 + Rain Sensor)"] -->|I2C / ADC| MCU["ESP8266 / ESP32 MCU"]
+        Sensors["Cảm biến (BMP280 + DHT11 + Rain Sensor)"] -->|I2C / GPIO / ADC| MCU["ESP8266 / ESP32 MCU"]
         MCU -->|Moving Average Filter| Payload["Đóng gói JSON Payload"]
-        Actuators["Còi Buzzer + Đèn LED + OLED SSD1306"] -.->|Phản hồi 2 chiều| MCU
+        Actuators["Relay 5V + Còi Buzzer 5V + Đèn LED + OLED SH1106"] -.->|Phản hồi 2 chiều| MCU
     end
 
     subgraph Communication["TẦNG TRUYỀN DẪN (TV1)"]
-        Payload -->|WiFi / MQTT QoS 1| Broker["MQTT Broker (Mosquitto / EMQX)"]
-        Broker -.->|Topic: weather/station01/alert| MCU
+        Payload -->|WiFi / MQTT QoS 0| Broker["MQTT Broker (Mosquitto / EMQX)"]
+        Broker -.->|QoS 1: weather/station01/alert| MCU
     end
 
     subgraph Backend_Layer["HỆ THỐNG MÁY CHỦ BACKEND (TV1)"]

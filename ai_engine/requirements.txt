@@ -10,4 +10,6 @@ statsmodels>=0.14.1
 requests>=2.31.0
 jupyter>=1.0.0
 pytest>=8.0.0
+sqlalchemy>=2.0.28
+psycopg[binary]>=3.1
 

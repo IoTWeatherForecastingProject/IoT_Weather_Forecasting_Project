@@ -83,6 +83,8 @@ ai_engine/data/raw/*
 !ai_engine/data/raw/.gitkeep
 ai_engine/data/processed/*
 !ai_engine/data/processed/.gitkeep
+# Báo cáo đánh giá sinh tự động khi chạy train (JSON, PNG); kết quả chính thức đưa vào docs/reports/
+ai_engine/reports/
 
 # Model weights nặng (PyTorch, TensorFlow, Pickle, Joblib, ONNX > 20MB)
 # Khuyến khích quản lý model weights qua Git LFS / DVC hoặc Google Drive release
@@ -94,8 +96,15 @@ ai_engine/data/processed/*
 *.pkl
 *.onnx
 !ai_engine/saved_models/.gitkeep
+# [TV2] ML model artifacts tracked explicitly (small benchmark/DL models < 20MB)
+!ml/models/*.joblib
+!ml/models/*.pt
+!ml/models/feature_schema.json
+ml/data/
 
 # --- Embedded & C++ (PlatformIO / Arduino / ESP-IDF) ---
+firmware/include/config.h
+firmware/include/weather_config.h
 .pio/
 .pioenvs/
 .piolibdeps/

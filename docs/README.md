@@ -28,7 +28,7 @@ Theo đúng phân công trong `TASK.md`, nội dung cuốn Báo cáo kỹ thuậ
 | Thành viên phụ trách | Chương / Phần báo cáo đảm nhiệm | Nội dung trọng tâm |
 |---|---|---|
 | **Cả 3 thành viên** | **Chương 1: Mở đầu & Tổng quan đề tài** | Đặt vấn đề, mục tiêu, phạm vi dự án (short-term local forecasting), khảo sát các giải pháp hiện nay. |
-| **TV1 (IoT + Backend)** | **Chương 2: Thiết kế Phần cứng IoT & Firmware** | Sơ đồ nguyên lý mạch, cảm biến BME280, Rain Sensor, vi điều khiển ESP8266/ESP32, bộ lọc Moving Average, giao thức MQTT (QoS 0 vs 1). |
+| **TV1 (IoT + Backend)** | **Chương 2: Thiết kế Phần cứng IoT & Firmware** | Sơ đồ nguyên lý mạch, cảm biến BMP280 + DHT11, Rain Sensor, OLED SH1106, vi điều khiển ESP8266/ESP32, bộ lọc Moving Average, giao thức MQTT (QoS 0 vs 1). |
 | **TV1 (IoT + Backend)** | **Chương 3: Hạ tầng Backend & CSDL Time-Series** | Kiến trúc Data Ingestion Worker, thiết kế CSDL PostgreSQL/TimescaleDB, tối ưu Composite Index, REST API, WebSocket và Vòng lặp phản hồi 2 chiều. |
 | **TV2 (Time-Series AI)** | **Chương 4: Nền tảng Chuỗi thời gian & Mô hình Dự báo Nhiệt độ** | Tiền xử lý dữ liệu (Resampling, Imputation, Outlier, ADF test), Feature Engineering (lags, rolling stats), Mô hình hồi quy nhiệt độ đa bước (+10m, +30m, +60m), Model Benchmark (Linear, RF, XGBoost) và Thực nghiệm Deep Learning (LSTM/GRU). |
 | **TV3 (AI + Analytics + FE)** | **Chương 5: Dự báo Xác suất Mưa & Phân tích Dị thường Cảm biến** | Xử lý mất cân bằng dữ liệu, trích xuất đặc trưng tụt áp/tăng ẩm, Mô hình phân loại mưa và Kỹ thuật Hiệu chuẩn Xác suất (Platt/Isotonic, Brier Score), Thuật toán phát hiện lỗi/trôi cảm biến và Đối chuẩn OpenWeatherMap. |
