@@ -230,3 +230,9 @@ Cập nhật bài đọc kết hợp theo yêu cầu người dùng: môi trư�
 
 Kiểm tra chất lượng hiện dùng `bmp_quality.h` trong cả bài thử và `main.cpp`: loại lỗi đọc thanh ghi, kênh đo bị tắt, ADC mặc định `0x80000` và giá trị ADC zero/bão hòa trước khi xét dải số. Dữ liệu reset từng bù thành 23,36°C/680,21 hPa dù chưa có phép đo; trường hợp này đã được thêm vào kiểm thử hồi quy. Firmware chính loại mẫu và xóa lịch sử lọc theo cơ chế hiện có; bản chính chưa được nạp lên mạch DO hiện tại.
 
+## OLED của trạm DO hiện tại
+
+Môi trường đang chạy trên NodeMCU là `esp8266_station_do` (`commissioning.cpp`). OLED 128×64 hiển thị bằng tiếng Anh: trạng thái MQTT `ONLINE/OFFLINE`, nhiệt độ từ DHT11, độ ẩm `RH`, áp suất `P` từ BMP280, trạng thái tấm dò `RAIN: DRY/WET`, và xác suất mưa dự báo `RAIN FCST +10M/+30M/+60M: n%`. Dòng `RAIN: WET` là tín hiệu đo tại tấm dò; dòng `RAIN FCST` là kết quả dự báo của backend. Mốc hiện trên màn là mốc có xác suất lớn nhất trong ba mốc dự báo, ưu tiên +30 phút nếu bằng nhau như logic cảnh báo.
+
+Backend gửi bản tin JSON ngắn đến `weather/{device_id}/forecast` khi có mẫu đo mới hợp lệ và đã kết nối MQTT. Bản tin không được lưu lại trên broker; firmware hiển thị `RAIN FCST: WAITING` trước khi nhận bản tin hoặc khi bản tin đã quá 90 giây. Khởi động lại backend và nạp lại firmware đều cần thiết khi thay đổi giao thức này. Lệnh cảnh báo còi vẫn đi qua topic `weather/{device_id}/alert` riêng.
+

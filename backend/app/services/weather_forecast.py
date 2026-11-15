@@ -1,5 +1,6 @@
 """Shared forecast and actuation path for HTTP requests and scheduled evaluation."""
 from datetime import datetime, timedelta, timezone
+import json
 import logging
 
 from sqlalchemy import desc
@@ -69,6 +70,20 @@ def build_forecast(db: Session, device_id=None, mqtt_client=None, now=None) -> d
             device_id=device_id, rain_probability=forecast[f"plus_{horizon}m"]["rain_probability"],
             horizon_minutes=horizon, mqtt_client=mqtt_client, threshold=threshold,
         )
+        if mqtt_client is not None and mqtt_client.is_connected():
+            snapshot = {
+                "type": "rain_forecast",
+                "device_id": device_id,
+                "horizon_minutes": horizon,
+                "probability_pct": round(forecast[f"plus_{horizon}m"]["rain_probability"] * 100),
+            }
+            try:
+                mqtt_client.publish(
+                    f"{settings.MQTT_TOPIC_PREFIX}/{device_id}/forecast",
+                    json.dumps(snapshot), qos=0, retain=False,
+                )
+            except Exception:
+                logger.exception("[FORECAST] Failed to publish OLED forecast for %s", device_id)
     else:
         logger.info("[ALERT ENGINE] Bo qua actuation vi du lieu tram %s da cu", device_id)
     return forecast

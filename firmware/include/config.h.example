@@ -23,6 +23,7 @@
 // MQTT Topics
 #define TOPIC_WEATHER_DATA      "weather/station01/data"
 #define TOPIC_WEATHER_ALERT     "weather/station01/alert"
+#define TOPIC_WEATHER_FORECAST  "weather/station01/forecast"
 #define TOPIC_WEATHER_STATUS    "weather/station01/status"
 
 // Chu kỳ đọc và gửi dữ liệu (mili-giây)

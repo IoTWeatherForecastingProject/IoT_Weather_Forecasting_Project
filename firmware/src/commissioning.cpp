@@ -19,9 +19,14 @@
 #include "config.h.example"
 #endif
 
+#ifndef TOPIC_WEATHER_FORECAST
+#define TOPIC_WEATHER_FORECAST "weather/" STATION_DEVICE_ID "/forecast"
+#endif
+
 namespace {
 constexpr uint8_t relayPin = ESP8266_RELAY_GPIO, rainPin = 13, dhtPin = 14;
 constexpr uint32_t sampleInterval = 5000, retryInterval = 5000;
+constexpr uint32_t forecastTimeout = 90000;
 #if defined(COMMISSIONING_RAIN_RELAY) && COMMISSIONING_RAIN_RELAY
 constexpr bool actuationEnabled = true;
 #else
@@ -43,6 +48,9 @@ Adafruit_SH1106G display(128, 64, &Wire, -1);
 WiFiClient network;
 PubSubClient mqtt(network);
 bool oledReady = false;
+bool forecastReceived = false;
+uint32_t forecastReceivedAt = 0;
+uint8_t forecastHorizon = 0, forecastPercent = 0;
 uint32_t lastSample = 0, lastRetry = 0, sequence = 0;
 char sampleTopic[128], statusTopic[128], commandTopic[128], replyTopic[128];
 char clientId[64];
@@ -134,7 +142,27 @@ void receiveForecastAlert(const byte *payload, unsigned int length) {
     if (forecastBuzzer.start(millis())) Serial.println("[FORECAST] Three beeps");
 }
 
+void receiveForecast(const byte *payload, unsigned int length) {
+    StaticJsonDocument<192> message;
+    if (deserializeJson(message, payload, length) ||
+        strcmp(message["type"] | "", "rain_forecast") != 0 ||
+        strcmp(message["device_id"] | "", STATION_DEVICE_ID) != 0 ||
+        !message["horizon_minutes"].is<int>() ||
+        !message["probability_pct"].is<int>()) return;
+    const int horizon = message["horizon_minutes"].as<int>();
+    const int percent = message["probability_pct"].as<int>();
+    if ((horizon != 10 && horizon != 30 && horizon != 60) || percent < 0 || percent > 100) return;
+    forecastHorizon = horizon;
+    forecastPercent = percent;
+    forecastReceivedAt = millis();
+    forecastReceived = true;
+}
+
 void command(char *topic, byte *payload, unsigned int length) {
+    if (publishWeatherEnabled && strcmp(topic, TOPIC_WEATHER_FORECAST) == 0) {
+        receiveForecast(payload, length);
+        return;
+    }
     if (forecastAlertsEnabled && strcmp(topic, TOPIC_WEATHER_ALERT) == 0) {
         receiveForecastAlert(payload, length);
         return;
@@ -167,7 +195,8 @@ void connect() {
         return;
     }
     if (!mqtt.subscribe(commandTopic, 1) ||
-        (forecastAlertsEnabled && !mqtt.subscribe(TOPIC_WEATHER_ALERT, 1))) {
+        (forecastAlertsEnabled && !mqtt.subscribe(TOPIC_WEATHER_ALERT, 1)) ||
+        (publishWeatherEnabled && !mqtt.subscribe(TOPIC_WEATHER_FORECAST, 0))) {
         mqtt.disconnect();
         return;
     }
@@ -235,21 +264,45 @@ void sample() {
     if (publishWeatherEnabled && mqtt.connected() && dhtOk && pressureValid)
         publishWeather(temperature, humidity, pressureHpa, rainLevel == LOW);
     if (!oledReady) return;
+
     display.clearDisplay();
-    display.setCursor(0, 0);
+    display.setTextWrap(false);
     display.setTextSize(1);
+    display.fillRect(0, 0, 128, 12, SH110X_WHITE);
+    display.setTextColor(SH110X_BLACK);
+    display.setCursor(4, 2);
+    display.print("LOCAL WEATHER");
+    display.setCursor(mqtt.connected() ? 91 : 85, 2);
+    display.print(mqtt.connected() ? "ONLINE" : "OFFLINE");
+
     display.setTextColor(SH110X_WHITE);
-    display.println("TV1 SENSOR CHECK");
-    if (dhtOk) {
-        display.printf("DHT T: %.1f C\n", temperature);
-        display.printf("DHT RH: %.1f %%\n", humidity);
-    } else display.println("DHT: INVALID");
-    display.printf("Rain DO: %s\n", rainLevel == LOW ? "WET" : "DRY");
-    if (pressureValid) display.printf("BMP P: %.1f hPa\n", pressureHpa);
-    else display.println("BMP: NOT READY");
-    display.printf("WiFi:%s MQTT:%s\n", WiFi.status() == WL_CONNECTED ? "OK" : "--",
-                   mqtt.connected() ? "OK" : "--");
-    display.printf("Relay: %s\n", !actuationEnabled ? "DISABLED" : relayOn ? "ON" : "RAIN AUTO");
+    display.setTextSize(2);
+    display.setCursor(2, 18);
+    if (dhtOk) display.printf("%.1fC", temperature);
+    else display.print("--.-C");
+
+    display.setTextSize(1);
+    display.setCursor(78, 18);
+    if (dhtOk) display.printf("RH %.0f%%", humidity);
+    else display.print("RH --%");
+    display.setCursor(78, 30);
+    if (pressureValid) display.printf("P %.1f", pressureHpa);
+    else display.print("P ----");
+
+    display.drawFastHLine(0, 42, 128, SH110X_WHITE);
+    if (rainLevel == LOW) {
+        display.fillRect(0, 45, 128, 10, SH110X_WHITE);
+        display.setTextColor(SH110X_BLACK);
+    }
+    display.setCursor(35, 46);
+    display.print(rainLevel == LOW ? "RAIN: WET" : "RAIN: DRY");
+    display.setTextColor(SH110X_WHITE);
+
+    display.setCursor(3, 56);
+    if (mqtt.connected() && forecastReceived &&
+        millis() - forecastReceivedAt < forecastTimeout)
+        display.printf("RAIN FCST +%uM: %u%%", forecastHorizon, forecastPercent);
+    else display.print("RAIN FCST: WAITING");
     display.display();
 }
 } // namespace

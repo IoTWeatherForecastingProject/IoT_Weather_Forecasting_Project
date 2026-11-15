@@ -1,4 +1,5 @@
 """BE-05 contract tests on an isolated DB; no model artifacts or running services needed."""
+import json
 from datetime import datetime, timedelta, timezone
 from itertools import count
 from types import SimpleNamespace
@@ -168,17 +169,29 @@ def test_invalid_device_id_is_rejected(context):
 def test_forecast_passes_running_worker_client_to_actuation(context, monkeypatch):
     context.add()
     mqtt_client = Mock()
+    mqtt_client.is_connected.return_value = True
     monkeypatch.setattr(app.state, "mqtt_worker", SimpleNamespace(client=mqtt_client), raising=False)
     response = context.client.get("/api/weather/forecast", params={"device_id": "target"})
     assert response.status_code == 200
     assert context.trigger.call_args.kwargs["mqtt_client"] is mqtt_client
+    topic, payload = mqtt_client.publish.call_args.args
+    assert topic == f"{settings.MQTT_TOPIC_PREFIX}/target/forecast"
+    assert json.loads(payload) == {
+        "type": "rain_forecast", "device_id": "target",
+        "horizon_minutes": 60, "probability_pct": 65,
+    }
+    assert mqtt_client.publish.call_args.kwargs == {"qos": 0, "retain": False}
 
 
-def test_old_measurements_can_be_viewed_without_actuating_the_station(context):
+def test_old_measurements_can_be_viewed_without_actuating_the_station(context, monkeypatch):
     context.add(age_minutes=3)
+    mqtt_client = Mock()
+    mqtt_client.is_connected.return_value = True
+    monkeypatch.setattr(app.state, "mqtt_worker", SimpleNamespace(client=mqtt_client), raising=False)
     response = context.client.get("/api/weather/forecast", params={"device_id": "target"})
     assert response.status_code == 200
     context.trigger.assert_not_called()
+    mqtt_client.publish.assert_not_called()
 
 
 def test_invalid_latest_measurement_does_not_reach_inference_or_actuation(context):
