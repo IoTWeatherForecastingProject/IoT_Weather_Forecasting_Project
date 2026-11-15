@@ -1,4 +1,10 @@
 # MODULE 4: WEB SCADA REALTIME DASHBOARD
+
+Giao diện có ba màn hình với đường dẫn riêng: `/?view=forecast` cho thời tiết hiện tại, dự báo +10/+30/+60 phút và cảnh báo mưa; `/?view=observations` cho biểu đồ IoT/Open-Meteo; `/?view=station` cho sức khỏe linh kiện, đối chuẩn và lịch sử mưa. Các tham số `api` và `device` được giữ khi chuyển màn hình. Giao diện dùng tiếng Việt, hỗ trợ mobile, trạng thái mất kết nối/dữ liệu cũ, giảm chuyển động theo hệ điều hành và không dùng dữ liệu giả khi chạy thực tế.
+
+Biểu đồ dùng dữ liệu quan trắc thật trong 2 giờ gần nhất; Open-Meteo là chuỗi tham chiếu riêng. Để có đường Open-Meteo liên tục, chạy crawler từ thư mục `ai_engine`: `..\backend\.venv\Scripts\python.exe -m openweather_benchmark.crawler --loop-recent-15min --interval 900`. Giao diện tự tải lại dữ liệu đối chuẩn mỗi 10 phút. Nếu chưa có điểm tham chiếu, biểu đồ ghi rõ trạng thái đó. Bảng sức khỏe chỉ liệt kê các mục có dữ liệu kiểm chứng: ESP8266, BMP280, DHT11 và cảm biến mưa. OLED, relay, còi, LED và nguồn không có kênh phản hồi sức khỏe riêng nên không xuất hiện trong bảng.
+
+Kiểm tra nhanh phần giao diện không cần cài thêm thư viện: `node dashboard/js/app.test.cjs` (chạy từ thư mục gốc). Dashboard vẫn cần kết nối CDN để tải Tailwind và ApexCharts theo cấu trúc hiện có.
 ## Giao Diện Giám Sát Thời Gian Thực & Điều Khiển 2 Chiều
 
 > **Phụ trách chính:** 👤 **Thành viên 3 (AI + Analytics + Frontend Engineer)**  

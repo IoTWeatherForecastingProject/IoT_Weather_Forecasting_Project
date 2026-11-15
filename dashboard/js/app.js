@@ -16,6 +16,27 @@
  */
 
 const params = new URLSearchParams(window.location.search);
+const CURRENT_VIEW = document.documentElement.dataset.view || "forecast";
+const VIEW_CONTENT = {
+    forecast: {
+        eyebrow: "TỔNG QUAN THỜI TIẾT",
+        title: "Dự báo thời tiết",
+        description: "Điều kiện hiện tại và xu hướng trong 60 phút tới.",
+        tab: "Dự báo",
+    },
+    observations: {
+        eyebrow: "DỮ LIỆU QUAN TRẮC",
+        title: "Biểu đồ thời tiết",
+        description: "So sánh số đo trạm IoT với dữ liệu tham chiếu Open-Meteo.",
+        tab: "Quan trắc",
+    },
+    station: {
+        eyebrow: "TRẠM THỜI TIẾT IOT",
+        title: "Trạm đo & sức khỏe",
+        description: "Tình trạng linh kiện, dữ liệu đối chuẩn và lịch sử mưa.",
+        tab: "Trạm đo",
+    },
+};
 const API_ORIGIN = (params.get("api") ||
     `${window.location.protocol === "https:" ? "https" : "http"}://${window.location.hostname || "localhost"}:8000`
 ).replace(/\/+$/, "");
@@ -27,6 +48,7 @@ const CONFIG = {
     REF_SOURCE: "open-meteo-15min",              // khớp crawler --once/--loop
     HISTORY_WINDOW_MS: 2 * 60 * 60 * 1000,      // biểu đồ giữ 2 giờ gần nhất
     HISTORY_PAGE_SIZE: 1000,                     // giới hạn của GET /history
+    RAIN_HISTORY_INTERVAL_MS: 15000,
     FORECAST_INTERVAL_MS: 15000,
     HEALTH_INTERVAL_MS: 30000,
     BENCHMARK_INTERVAL_MS: 10 * 60 * 1000,
@@ -51,8 +73,10 @@ const state = {
     wsStatus: "connecting",
     wsOpenedAt: 0,
     lastSampleAt: null,
+    latestMeasurement: null,
     wsRetryMs: 1000,
     chart: null,
+    chartAvailable: true,
     chartVar: "temperature",
     chartDirty: false,
     chartRange: null,
@@ -63,10 +87,34 @@ const state = {
     threshold: null,
     historyFailed: false,
     historyLoading: true,
+    rainHistorySnapshot: null,
     failures: {},        // đếm lỗi theo loại request để hiện trạng thái Backend
+    latestRain: null,
+    latestForecast: null,
+    healthReport: null,
+    healthNote: "",
 };
 
 const $ = (id) => document.getElementById(id);
+
+function initView() {
+    const current = VIEW_CONTENT[CURRENT_VIEW] || VIEW_CONTENT.forecast;
+    setText("view-eyebrow", current.eyebrow);
+    setText("view-title", current.title);
+    setText("view-description", current.description);
+    document.title = `${current.tab} | IoT Local Weather`;
+    const targetUrl = new URL(window.location.href);
+    targetUrl.hash = "";
+    document.querySelectorAll("[data-view-link]").forEach((link) => {
+        const view = link.dataset.viewLink;
+        targetUrl.searchParams.set("view", view);
+        link.href = `${targetUrl.pathname}${targetUrl.search}`;
+        if (view === CURRENT_VIEW) link.setAttribute("aria-current", "page");
+        else link.removeAttribute("aria-current");
+    });
+    targetUrl.searchParams.set("view", "forecast");
+    document.querySelector(".brand").href = `${targetUrl.pathname}${targetUrl.search}`;
+}
 
 // --- Tiện ích -------------------------------------------------------------------
 
@@ -82,8 +130,8 @@ function fmt(v, digits = 1, suffix = "") {
 function setText(id, text, className) {
     const el = $(id);
     if (!el) return;
-    el.textContent = text;
-    if (className !== undefined) el.className = className;
+    if (el.textContent !== String(text)) el.textContent = text;
+    if (className !== undefined && el.className !== className) el.className = className;
 }
 
 function toMs(ts) {
@@ -95,9 +143,10 @@ function timeLabel(ms) {
     return new Date(ms).toLocaleTimeString("vi-VN", { hour12: false });
 }
 
-function rainTimeLabel(ms) {
-    const date = new Date(ms);
-    return `${timeLabel(ms)} · ${date.toLocaleDateString("vi-VN")}`;
+function rainTimeLabel(timestamp) {
+    return new Date(timestamp).toLocaleString("vi-VN", {
+        timeZone: "Asia/Ho_Chi_Minh", hour12: false,
+    });
 }
 
 /** 404/405: Backend chưa có endpoint (hoặc chỉ có method khác), khác với lỗi mạng. */
@@ -140,7 +189,7 @@ function markBackend(kind, ok, err) {
 
 function initClock() {
     const tick = () => {
-        setText("live-clock", `${timeLabel(Date.now())} (Local)`);
+        setText("live-clock", timeLabel(Date.now()));
         updateLiveDataWarning();
     };
     tick();
@@ -243,19 +292,27 @@ function initChartNavigation(chartElement) {
 
 function initChart() {
     const chartElement = $("weather-chart");
+    if (typeof ApexCharts === "undefined") {
+        state.chartAvailable = false;
+        $("chart-loading").classList.remove("hidden");
+        setText("chart-loading", "Không tải được thư viện biểu đồ. Kiểm tra kết nối mạng.");
+        state.chart = { updateOptions() {} };
+        return;
+    }
     state.chart = new ApexCharts(chartElement, {
         chart: {
             type: "line",
-            height: 288,
+            height: 390,
             background: "transparent",
             toolbar: { show: false },
             zoom: { enabled: false },
             animations: { enabled: false },
         },
         theme: { mode: "dark" },
-        stroke: { curve: "straight", width: [2, 2] },
-        markers: { size: [0, 4] },
-        colors: ["#06b6d4", "#f59e0b"],
+        stroke: { curve: "smooth", width: [3, 2], dashArray: [0, 5] },
+        markers: { size: [0, 3] },
+        colors: ["#73d8de", "#f4bf76"],
+        fill: { type: ["gradient", "solid"], gradient: { shade: "dark", opacityFrom: 0.22, opacityTo: 0.01, stops: [0, 95, 100] } },
         series: [],
         noData: { text: "Chưa có dữ liệu", style: { color: "#94a3b8" } },
         xaxis: {
@@ -263,14 +320,14 @@ function initChart() {
             tooltip: { enabled: false },
             labels: {
                 datetimeUTC: false,
-                style: { colors: "#64748b", fontSize: "11px", fontFamily: "JetBrains Mono" },
+                style: { colors: "#8ba6b4", fontSize: "11px" },
             },
         },
         yaxis: {
             decimalsInFloat: 1,
-            labels: { style: { colors: "#64748b", fontSize: "11px", fontFamily: "JetBrains Mono" } },
+            labels: { style: { colors: "#8ba6b4", fontSize: "11px" } },
         },
-        grid: { borderColor: "#1e293b", strokeDashArray: 4 },
+        grid: { borderColor: "#294356", strokeDashArray: 4 },
         legend: { position: "top", horizontalAlign: "right", labels: { colors: "#cbd5e1" } },
         tooltip: {
             theme: "dark",
@@ -314,6 +371,7 @@ function initChart() {
 }
 
 function renderChart() {
+    if (!state.chart) return;
     state.chartDirty = false;
     const v = state.chartVar;
     const meta = VARIABLES[v];
@@ -324,6 +382,8 @@ function renderChart() {
     const start = Date.now() - CONFIG.HISTORY_WINDOW_MS;
     const iot = state.points.filter((p) => p.t >= start && isNum(p[v])).map((p) => [p.t, p[v]]);
     const ref = state.reference.filter((p) => p.t >= start && isNum(p[v])).map((p) => [p.t, p[v]]);
+    const loading = $("chart-loading");
+    if (!state.historyLoading && state.chartAvailable) loading.classList.add("hidden");
 
     const nonEmptySeries = [iot, ref].filter((series) => series.length);
     state.chartExtent = null;
@@ -361,8 +421,8 @@ function renderChart() {
     state.chart.updateOptions({
         xaxis,
         series: [
-            { name: `Trạm IoT (${meta.unit})`, data: iot },
-            { name: `Tham chiếu Open-Meteo (${meta.unit})`, data: ref },
+            { name: `Trạm IoT (${meta.unit})`, type: "area", data: iot },
+            { name: `Tham chiếu Open-Meteo (${meta.unit})`, type: "line", data: ref },
         ],
         yaxis: {
             min,
@@ -370,7 +430,7 @@ function renderChart() {
             tickAmount,
             decimalsInFloat: 1,
             title: { text: `${meta.label} (${meta.unit})`, style: { color: "#94a3b8" } },
-            labels: { style: { colors: "#64748b", fontSize: "11px", fontFamily: "JetBrains Mono" } },
+            labels: { style: { colors: "#8ba6b4", fontSize: "11px" } },
         },
     }, false, false);
 
@@ -382,84 +442,82 @@ function renderChart() {
         ? ` · ${ref.length} điểm Open-Meteo`
         : " · Chưa có dữ liệu Open-Meteo trong 2 giờ gần nhất";
     setText("chart-note", note);
-    renderRainHistory();
+    if (!state.chartAvailable || (!iot.length && !ref.length)) {
+        loading.classList.remove("hidden");
+        setText("chart-loading", !state.chartAvailable ? "Không tải được thư viện biểu đồ. Kiểm tra kết nối mạng."
+            : state.historyFailed ? "Không tải được lịch sử quan trắc." : "Chưa có số đo trong 2 giờ gần nhất.");
+    }
 }
 
-function renderRainHistory() {
-    const now = Date.now();
-    const start = now - CONFIG.HISTORY_WINDOW_MS;
-    const events = [];
-    let previous = null;
-    let event = null;
-    let hasRainReadings = false;
-    for (const point of state.points) {
-        if (point.t > now) break;
-        if (point.t < start) {
-            previous = point;
-            continue;
-        }
-        if (point.raining !== null) hasRainReadings = true;
-        if (event && (point.t - event.lastWet.t > CONFIG.LIVE_DATA_TIMEOUT_MS || point.raining === null)) {
-            event.interrupted = true;
-            event = null;
-        }
-        if (point.raining === true) {
-            if (!event) {
-                event = { firstWet: point, lastWet: point, dryAt: null, interrupted: false,
-                    hasDryBefore: previous?.raining === false && point.t - previous.t <= CONFIG.LIVE_DATA_TIMEOUT_MS };
-                events.push(event);
-            }
-            event.lastWet = point;
-        } else if (point.raining === false && event) {
-            event.dryAt = point.t;
-            event = null;
-        }
-        previous = point;
-    }
-
+function renderRainHistory(data) {
     const list = $("rain-history-list");
-    const items = events.reverse().map(({ firstWet, lastWet, dryAt, interrupted, hasDryBefore }) => {
-        const item = document.createElement("li");
-        item.className = "rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-sm";
-        const time = document.createElement("p");
-        time.className = "font-semibold text-slate-100";
-        time.textContent = `${hasDryBefore ? "Chuyển sang ướt" : "Ghi nhận ướt"} lúc ${rainTimeLabel(firstWet.t)}`;
-        const readings = document.createElement("p");
-        readings.className = "mt-1 font-mono text-cyan-300";
-        readings.textContent = [
-            `Nhiệt độ ${fmt(firstWet.temperature, 1, " °C")}`,
-            `Độ ẩm ${fmt(firstWet.humidity, 1, "%")}`,
-            `Áp suất ${fmt(firstWet.pressure, 1, " hPa")}`,
-        ].join(" · ");
-        const end = document.createElement("p");
-        end.className = "mt-1 text-xs text-slate-400";
-        if (dryAt !== null) {
-            end.textContent = `Ghi nhận khô lại lúc ${rainTimeLabel(dryAt)}`;
-        } else if (interrupted || now - lastWet.t > CONFIG.LIVE_DATA_TIMEOUT_MS) {
-            end.textContent = `Mẫu ướt cuối lúc ${rainTimeLabel(lastWet.t)}. Chưa rõ lúc khô lại.`;
-        } else {
-            end.textContent = "Tấm dò vẫn báo ướt";
-        }
-        item.append(time, readings, end);
-        return item;
+    const wasOpen = new Map([...list.querySelectorAll("details")].map((day) => [day.dataset.date, day.open]));
+    let count = 0;
+    const days = data.days.map((day, index) => {
+        const group = document.createElement("li");
+        group.className = "rain-day";
+        const details = document.createElement("details");
+        details.dataset.date = day.date;
+        details.open = wasOpen.get(day.date) ?? (index === 0);
+        const title = document.createElement("summary");
+        title.textContent = `${day.date.split("-").reverse().join("/")} · ${day.events.length} lần báo ướt`;
+        const events = document.createElement("ul");
+        events.className = "detail-list rain-day-events";
+        for (const event of day.events) events.append(renderRainEvent(event));
+        count += day.events.length;
+        details.append(title, events);
+        group.append(details);
+        return group;
     });
-    list.replaceChildren(...items);
+    list.replaceChildren(...days);
+    setText("rain-history-note", count
+        ? `${count} lần ghi nhận tấm dò ướt`
+        : data.has_readings ? "Tấm dò chưa báo ướt trong các mẫu đã lưu." : "Chưa có số đo trong 7 ngày gần nhất.");
+}
 
-    let note = "Chưa có số đo mưa trong 2 giờ gần nhất.";
-    if (state.historyLoading) note = "Đang tải lịch sử…";
-    else if (state.historyFailed) note = "Không tải đủ lịch sử. Danh sách hiển thị các mẫu đã nhận.";
-    else if (items.length) note = `${items.length} lần ghi nhận tấm dò ướt`;
-    else if (hasRainReadings) note = "Tấm dò chưa báo ướt trong các mẫu đã lưu.";
-    setText("rain-history-note", note);
+function renderRainEvent(event) {
+    const item = document.createElement("li");
+    const time = document.createElement("p");
+    time.className = "rain-event-time";
+    time.textContent = `${event.confirmed_start ? "Chuyển sang ướt" : "Ghi nhận ướt"} lúc ${rainTimeLabel(event.first_wet_at)}`;
+    const readings = document.createElement("p");
+    readings.className = "rain-event-readings";
+    readings.textContent = [
+        `Nhiệt độ ${fmt(event.temperature, 1, " °C")}`,
+        `Độ ẩm ${fmt(event.humidity, 1, "%")}`,
+        `Áp suất ${fmt(event.pressure, 1, " hPa")}`,
+    ].join(" · ");
+    const end = document.createElement("p");
+    end.className = "detail-note";
+    if (event.status === "dry") {
+        end.textContent = `Ghi nhận khô lại lúc ${rainTimeLabel(event.dry_at)}`;
+    } else if (event.status === "wet") {
+        end.textContent = "Tấm dò vẫn báo ướt";
+    } else {
+        end.textContent = `Mẫu ướt cuối lúc ${rainTimeLabel(event.last_wet_at)}. Chưa rõ lúc khô lại.`;
+    }
+    item.append(time, readings, end);
+    return item;
+}
+
+async function fetchRainHistory() {
+    try {
+        const data = await apiGet("/rain-history", { device_id: CONFIG.DEVICE_ID });
+        markBackend("rainHistory", true);
+        const snapshot = JSON.stringify(data);
+        if (state.rainHistorySnapshot !== snapshot) renderRainHistory(data);
+        state.rainHistorySnapshot = snapshot;
+    } catch (err) {
+        markBackend("rainHistory", false, err);
+        state.rainHistorySnapshot = null;
+        setText("rain-history-note", "Không cập nhật được lịch sử mưa.");
+    }
 }
 
 function addPoint(record) {
     const t = toMs(record.timestamp);
     if (t === null) return;
-    const point = {
-        t,
-        raining: record.rain_detected === 1 ? true : record.rain_detected === 0 ? false : null,
-    };
+    const point = { t };
     for (const v of Object.keys(VARIABLES)) {
         const n = Number(record[v]);
         point[v] = record[v] !== null && record[v] !== undefined && Number.isFinite(n) ? n : null;
@@ -509,7 +567,10 @@ function updateTelemetryCards(data) {
     const timestamp = toMs(data.timestamp);
     if (timestamp === null || (state.lastSampleAt !== null && timestamp < state.lastSampleAt)) return;
     state.lastSampleAt = timestamp;
+    state.latestMeasurement = data;
+    state.latestRain = data.rain_detected === 1 ? true : data.rain_detected === 0 ? false : null;
     updateLiveDataWarning();
+    setText("hero-updated", `Số đo lúc ${rainTimeLabel(timestamp)}`);
     setText("card-temp", fmt(data.temperature, 1));
     setText("card-press", fmt(data.pressure, 1));
     setText("card-hum", fmt(data.humidity, 1));
@@ -519,20 +580,58 @@ function updateTelemetryCards(data) {
 
     if (data.rain_detected === 1 || data.rain_detected === 0) {
         if (data.rain_detected === 1) {
-            setText("card-rain-status", "ĐANG MƯA", "text-2xl font-bold font-mono text-rose-500 animate-pulse");
+            setText("card-rain-status", "Cảm biến đang ghi nhận mưa");
+            setText("hero-rain-short", "Đang mưa");
         } else {
-            setText("card-rain-status", "KHÔ RÁO", "text-2xl font-bold font-mono text-emerald-400");
+            setText("card-rain-status", "Cảm biến chưa ghi nhận mưa");
+            setText("hero-rain-short", "Chưa mưa");
         }
     } else {
-        setText("card-rain-status", "--", "text-2xl font-bold font-mono text-slate-500");
+        setText("card-rain-status", "Chưa có trạng thái mưa");
+        setText("hero-rain-short", "Chưa có");
     }
+    $("hero-weather-icon").querySelector("use").setAttribute("href", state.latestRain ? "#i-rain" : "#i-cloud");
+    renderWeatherSummary();
+    if (state.healthReport) renderHealth(state.healthReport, state.healthNote);
 }
 
 function clearTelemetryCards(label) {
-    ["card-temp", "card-hum", "card-press"].forEach((id) => setText(id, "--.-"));
+    ["card-temp", "card-hum", "card-press"].forEach((id) => setText(id, "--"));
     $("bar-hum").style.width = "0%";
     setText("card-rain-raw", "----");
-    setText("card-rain-status", label, "text-2xl font-bold font-mono text-slate-500");
+    state.latestMeasurement = null;
+    setText("card-rain-status", label);
+    setText("hero-rain-short", "Chưa có");
+    setText("hero-updated", "Chưa có thời gian cập nhật");
+    renderWeatherSummary();
+}
+
+function renderWeatherSummary() {
+    const stale = state.lastSampleAt === null || Date.now() - state.lastSampleAt > CONFIG.LIVE_DATA_TIMEOUT_MS;
+    const disconnected = state.wsStatus === "reconnecting";
+    const freshness = $("hero-freshness");
+    freshness.classList.toggle("stale", stale || disconnected);
+    setText("hero-freshness", state.lastSampleAt === null ? "Đang chờ số đo" : disconnected ? "Mất kết nối" : stale ? "Dữ liệu đã cũ" : "Số đo mới");
+    if (state.lastSampleAt === null) {
+        setText("hero-summary", "Dự báo sẽ xuất hiện khi trạm gửi đủ số đo.");
+        return;
+    }
+    if (stale || disconnected) {
+        setText("hero-summary", "Số đo hiển thị là lần cập nhật cuối. Kiểm tra kết nối trước khi sử dụng.");
+        return;
+    }
+    const forecast = state.latestForecast;
+    const probabilities = [10, 30, 60].map((h) => forecast?.[`plus_${h}m`]?.rain_probability)
+        .filter((p) => p !== null && p !== undefined).map(Number)
+        .filter((p) => Number.isFinite(p) && p >= 0 && p <= 1);
+    if (state.latestRain) {
+        setText("hero-summary", "Tấm dò đang báo ướt tại trạm. Theo dõi các mốc dự báo bên dưới để xem xu hướng mưa.");
+    } else if (probabilities.length) {
+        const peak = Math.round(Math.max(...probabilities) * 100);
+        setText("hero-summary", `Trong 60 phút tới, xác suất mưa cao nhất ở ba mốc dự báo là ${peak}%.`);
+    } else {
+        setText("hero-summary", "Chưa có dự báo cho giờ tới. Số đo hiện tại được cập nhật trực tiếp từ trạm.");
+    }
 }
 
 /** Xu hướng áp suất: ΔP giữa điểm mới nhất và điểm cách ~60 phút, quy về hPa/giờ. */
@@ -576,16 +675,36 @@ async function fetchCurrent() {
 
 // --- 4. WebSocket ---------------------------------------------------------------
 
+const LIVE_STATUS = {
+    connecting: ["Đang kết nối…", "amber"],
+    reconnecting: ["Mất kết nối trực tiếp", "rose"],
+    waiting: ["Chờ số đo", "amber"],
+    offline: ["Trạm ngoại tuyến", "rose"],
+    live: ["Trực tiếp", "emerald"],
+};
+
+function renderConnectionStatus(stationSilent) {
+    let status = state.wsStatus;
+    if (status === "connected") {
+        status = stationSilent ? "offline" : state.lastSampleAt === null ? "waiting" : "live";
+    }
+    const [label, color] = LIVE_STATUS[status];
+    setText("connection-status", label, `text-${color}-400`);
+    $("status-dot").className = `bg-${color}-500`;
+    $("status-ping").classList.toggle("hidden", status !== "live");
+}
+
 function updateLiveDataWarning() {
+    const stationSilent = Date.now() - (state.lastSampleAt ?? state.wsOpenedAt) > CONFIG.LIVE_DATA_TIMEOUT_MS;
+    renderConnectionStatus(stationSilent);
     let message = "";
     if (state.wsStatus === "reconnecting") {
         message = "Mất kết nối trực tiếp. Đang tự kết nối lại.";
-    } else if (state.wsStatus === "connected" &&
-        Date.now() - (state.lastSampleAt ?? state.wsOpenedAt) > CONFIG.LIVE_DATA_TIMEOUT_MS) {
+    } else if (state.wsStatus === "connected" && stationSilent) {
         message = "Không nhận được số đo mới từ trạm trong hơn 30 giây.";
     }
     if (message && state.lastSampleAt !== null) {
-        message += ` Số đo gần nhất lúc ${timeLabel(state.lastSampleAt)}.`;
+        message += ` Số đo gần nhất lúc ${rainTimeLabel(state.lastSampleAt)}.`;
     }
     const warning = $("live-data-warning");
     if (warning.textContent !== message) {
@@ -593,21 +712,12 @@ function updateLiveDataWarning() {
         if (state.lastSampleAt !== null) state.chartDirty = true;
     }
     warning.classList.toggle("hidden", !message);
+    renderWeatherSummary();
 }
 
 function setWsStatus(kind) {
-    const styles = {
-        connecting: ["ĐANG KẾT NỐI…", "text-amber-400", "bg-amber-500", false],
-        connected: ["WS CONNECTED", "text-emerald-400", "bg-emerald-500", true],
-        reconnecting: ["MẤT KẾT NỐI", "text-rose-400", "bg-rose-500", false],
-    }[kind];
     state.wsStatus = kind;
     updateLiveDataWarning();
-    setText("connection-status", styles[0], styles[1]);
-    $("status-dot").className = `relative inline-flex rounded-full h-2.5 w-2.5 ${styles[2]}`;
-    $("status-ping").className = styles[3]
-        ? "pulse-indicator absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"
-        : "hidden";
 }
 
 function connectWebSocket() {
@@ -703,26 +813,105 @@ const HEALTH_UNKNOWN_REASONS = {
     stale_data: "Dữ liệu trạm đã cũ",
 };
 
-function renderHealth(status, anomalies, note) {
-    const key = HEALTH_STYLES[status] ? status : "UNKNOWN";
-    setText("health-badge", key, `text-xs font-mono font-bold px-2.5 py-1 rounded-full border ${HEALTH_STYLES[key]}`);
+const HEALTH_LABELS = {
+    OK: "DỮ LIỆU ỔN",
+    WARNING: "CẦN KIỂM TRA",
+    FAULT: "SỐ ĐO LỖI",
+    UNKNOWN: "CHƯA ĐÁNH GIÁ",
+};
+
+// Chỉ hiện các tín hiệu có thể đối chiếu với số đo trạm và /sensor-health.
+const STATION_COMPONENTS = [
+    { id: "controller", name: "ESP8266 NodeMCU", role: "Bộ điều khiển trạm" },
+    { id: "dht11", name: "DHT11", role: "Nhiệt độ · độ ẩm", sensors: ["temperature", "humidity"] },
+    { id: "bmp280", name: "BMP280", role: "Áp suất", sensors: ["pressure"] },
+    { id: "rain", name: "Cảm biến mưa", role: "Tấm dò · tín hiệu DO", sensors: ["rain"] },
+];
+
+const ANOMALY_LABELS = {
+    MISSING_VALUE: "Thiếu giá trị đo",
+    OUT_OF_RANGE: "Giá trị ngoài khoảng",
+    SPIKE: "Biến động đột ngột",
+    FROZEN_VALUE: "Giá trị không đổi lâu",
+    WATER_STAGNATION_DRIFT: "Dữ liệu báo ướt kéo dài",
+};
+
+function componentAssessment(component, data) {
+    const latest = state.lastSampleAt || 0;
+    const fresh = latest > 0 && Date.now() - latest <= CONFIG.LIVE_DATA_TIMEOUT_MS;
+    if (component.id === "controller") {
+        if (fresh) return { level: "observed", label: "Có dữ liệu mới",
+            detail: "Backend đang nhận số đo mới của trạm." };
+        return { level: "unknown", label: latest === 0 ? "Chưa có dữ liệu" : "Dữ liệu đã cũ",
+            detail: latest === 0 ? "Chưa nhận được số đo từ trạm." :
+                `Số đo cuối lúc ${timeLabel(latest)}.` };
+    }
+    if (!fresh || !state.latestMeasurement)
+        return { level: "unknown", label: "Chưa có số đo mới",
+            detail: "Cần số đo mới từ trạm để kiểm tra tín hiệu." };
+    const checked = toMs(data?.checked_at);
+    const reportFresh = checked !== null && Date.now() - checked <= CONFIG.LIVE_DATA_TIMEOUT_MS;
+    const anomalies = reportFresh
+        ? (data.anomalies || []).filter((a) => component.sensors?.includes(a.sensor))
+        : [];
+    if (anomalies.length) {
+        const fault = anomalies.some((a) => ["MISSING_VALUE", "OUT_OF_RANGE"].includes(a.type));
+        return { level: fault ? "fault" : "warning", label: fault ? "Lỗi số đo" : "Cần kiểm tra",
+            detail: anomalies.map((a) => ANOMALY_LABELS[a.type] || String(a.type || "Dị thường")).join(" · ") };
+    }
+    if (component.id === "rain") {
+        if (state.latestRain !== null)
+            return { level: "observed", label: state.latestRain ? "DO báo ướt" : "DO báo khô",
+                detail: "Trạng thái DO do firmware gửi trong số đo mới nhất." };
+        return { level: "unknown", label: "Chưa đủ dữ liệu",
+            detail: "Chưa có tín hiệu mưa mới từ trạm." };
+    }
+    const reading = state.latestMeasurement;
+    if (component.id === "dht11" && reading.temperature != null && reading.humidity != null &&
+        isNum(Number(reading.temperature)) && isNum(Number(reading.humidity))) {
+        return { level: "observed", label: "Có số đo mới",
+            detail: `Nhiệt độ ${fmt(reading.temperature, 1)}°C · Độ ẩm ${fmt(reading.humidity, 1)}%.` };
+    }
+    if (component.id === "bmp280" && reading.pressure != null && isNum(Number(reading.pressure))) {
+        return { level: "observed", label: "Có số đo mới",
+            detail: `Áp suất ${fmt(reading.pressure, 1)} hPa.` };
+    }
+    return { level: "unknown", label: "Thiếu số đo",
+        detail: "Số đo mới nhất chưa có giá trị của cảm biến này." };
+}
+
+function renderHealth(data, note) {
+    state.healthReport = data;
+    state.healthNote = note;
+    const checked = toMs(data?.checked_at);
+    const fresh = checked !== null && Date.now() - checked <= CONFIG.LIVE_DATA_TIMEOUT_MS;
+    const key = fresh && HEALTH_STYLES[data?.status] ? data.status : "UNKNOWN";
+    setText("health-badge", HEALTH_LABELS[key],
+        `text-xs font-mono font-bold px-2.5 py-1 rounded-full border ${HEALTH_STYLES[key]}`);
     const list = $("health-list");
-    list.replaceChildren();
-    (anomalies || []).forEach((a) => {
+    const rows = STATION_COMPONENTS.map((component) => {
+        const assessment = componentAssessment(component, data);
         const li = document.createElement("li");
-        li.className = "flex flex-wrap gap-2 items-baseline p-2 rounded-lg bg-slate-900/60 border border-slate-800";
-        const type = document.createElement("span");
-        type.className = "font-mono text-xs font-bold text-amber-400";
-        type.textContent = String(a.type || "ANOMALY");
-        const sensor = document.createElement("span");
-        sensor.className = "font-mono text-xs text-cyan-400";
-        sensor.textContent = String(a.sensor || "");
-        const msg = document.createElement("span");
-        msg.className = "text-slate-300 text-xs";
-        msg.textContent = String(a.message || "");
-        li.append(type, sensor, msg);
-        list.appendChild(li);
+        li.className = "component-row";
+        li.dataset.level = assessment.level;
+        const top = document.createElement("div");
+        top.className = "component-top";
+        const name = document.createElement("strong");
+        name.textContent = component.name;
+        const badge = document.createElement("span");
+        badge.className = "component-status";
+        badge.textContent = assessment.label;
+        top.append(name, badge);
+        const role = document.createElement("span");
+        role.className = "component-role";
+        role.textContent = component.role;
+        const detail = document.createElement("p");
+        detail.className = "component-detail";
+        detail.textContent = assessment.detail;
+        li.append(top, role, detail);
+        return li;
     });
+    list.replaceChildren(...rows);
     setText("health-note", note);
 }
 
@@ -739,10 +928,10 @@ async function fetchSensorHealth() {
                 ? `Chưa có dữ liệu đo trong ${data.window_minutes || 360} phút gần nhất`
                 : HEALTH_UNKNOWN_REASONS[data.reason] || "Chưa đánh giá được sức khỏe cảm biến";
         }
-        renderHealth(data.status, data.anomalies, note + when);
+        renderHealth(data, note + when + " · Đánh giá theo dữ liệu trạm gửi về.");
     } catch (err) {
         markBackend("health", false, err);
-        renderHealth("UNKNOWN", [], isMissingEndpoint(err)
+        renderHealth(null, isMissingEndpoint(err)
             ? "Backend chưa có endpoint /sensor-health"
             : "Không kiểm tra được sức khỏe cảm biến");
     }
@@ -751,27 +940,33 @@ async function fetchSensorHealth() {
 // --- 7. Dự báo AI ---------------------------------------------------------------
 
 const RAIN_SOURCE_STYLES = {
-    model: ["MODEL", "text-emerald-400 border-emerald-500/40"],
-    heuristic: ["HEURISTIC", "text-amber-400 border-amber-500/40"],
+    model: ["MÔ HÌNH", "source-tag"],
+    heuristic: ["HEURISTIC", "source-tag"],
 };
 
 function renderHorizon(h, horizon) {
     horizon = horizon || {};
     setText(`fc-temp-${h}`, fmt(horizon.temperature_c, 1, " °C"));
     const p = Number(horizon.rain_probability);
-    const valid = horizon.rain_probability !== null && horizon.rain_probability !== undefined && Number.isFinite(p);
+    const valid = horizon.rain_probability !== null && horizon.rain_probability !== undefined && Number.isFinite(p) && p >= 0 && p <= 1;
     const pct = valid ? Math.round(Math.min(Math.max(p, 0), 1) * 100) : null;
-    setText(`fc-rain-${h}`, valid ? `${pct}%${horizon.rain_level ? ` (${horizon.rain_level})` : ""}` : "--%");
+    setText(`fc-rain-${h}`, valid ? `${pct}%` : "--%");
     $(`fc-bar-${h}`).style.width = valid ? `${pct}%` : "0%";
+    const risk = !valid ? "unknown" : p >= 0.7 ? "high" : p >= 0.4 ? "medium" : "low";
+    $(`fc-card-${h}`).dataset.risk = risk;
+    setText(`fc-risk-${h}`, { unknown: "Chưa có dự báo", low: "Khả năng thấp", medium: "Cần chú ý", high: "Khả năng cao" }[risk]);
+    $(`fc-icon-${h}`).querySelector("use").setAttribute("href", valid && p >= 0.4 ? "#i-rain" : "#i-cloud");
 
     const src = RAIN_SOURCE_STYLES[horizon.rain_source];
     const badge = $(`fc-src-${h}`);
     if (src) {
         badge.textContent = src[0];
-        badge.className = `ml-1 px-1.5 py-0.5 rounded text-[10px] font-normal border ${src[1]}`;
+        badge.className = src[1];
     } else {
         badge.className = "hidden";
     }
+    const generated = state.latestForecast ? toMs(state.latestForecast.generated_at) : null;
+    setText(`fc-time-${h}`, generated ? timeLabel(generated + Number(h) * 60000).slice(0, 5) : "--:--");
     return valid ? p : null;
 }
 
@@ -779,15 +974,36 @@ async function fetchForecast() {
     try {
         const data = await apiGet("/forecast", { device_id: CONFIG.DEVICE_ID });
         markBackend("forecast", true);
+        state.latestForecast = data;
         const probs = {};
         for (const h of ["10", "30", "60"]) probs[h] = renderHorizon(h, data[`plus_${h}m`]);
         const generated = toMs(data.generated_at);
-        setText("fc-updated", generated ? `Cập nhật ${timeLabel(generated)}` : "Đã cập nhật");
+        const forecastStale = generated !== null && Date.now() - generated > 2 * 60 * 1000;
+        setText("fc-updated", generated
+            ? `${forecastStale ? "Dự báo đã cũ · " : "Tạo lúc "}${timeLabel(generated)}`
+            : "Không có thời gian tạo");
+        const valid = Object.values(probs).filter((p) => p !== null);
+        if (valid.length) {
+            const peak = Math.round(Math.max(...valid) * 100);
+            setText("rain-peak", `${peak}%`);
+            setText("rain-outlook", forecastStale ? "Dự báo đã cũ. Hãy làm mới trước khi sử dụng."
+                : data.alert_triggered
+                ? "Dự báo đã đạt ngưỡng cảnh báo đang áp dụng."
+                : peak >= 40 ? "Có khả năng mưa ở một hoặc nhiều mốc dự báo." : "Khả năng mưa ở các mốc dự báo hiện thấp.");
+        } else {
+            setText("rain-peak", "--%");
+            setText("rain-outlook", "Chưa có xác suất mưa hợp lệ.");
+        }
+        renderWeatherSummary();
         renderAlert(data, probs);
     } catch (err) {
         markBackend("forecast", false, err);
+        state.latestForecast = null;
         for (const h of ["10", "30", "60"]) renderHorizon(h, null);
         setText("fc-updated", "Không tải được dự báo");
+        setText("rain-peak", "--%");
+        setText("rain-outlook", "Không tải được dự báo. Thử làm mới sau.");
+        renderWeatherSummary();
         $("alert-banner").classList.add("hidden");
     }
 }
@@ -899,19 +1115,31 @@ function initTwoWayControl() {
 // --- Khởi động ------------------------------------------------------------------
 
 document.addEventListener("DOMContentLoaded", () => {
+    initView();
     setText("station-id", CONFIG.DEVICE_ID);
+    $("trend-press").title = "Thay đổi áp suất theo giờ, tính từ số đo trạm trong khoảng 60 phút.";
+    $("card-rain-raw").title = "Giá trị ADC thô của cảm biến mưa; cách diễn giải phụ thuộc hiệu chuẩn phần cứng.";
+    $("health-badge").title = "Đánh giá dị thường cảm biến trong cửa sổ 6 giờ.";
     initClock();
     connectWebSocket();
-    initChart();
-    initTwoWayControl();
-
-    loadHistory().then(fetchCurrent);
-    loadThreshold().then(fetchForecast);
-    fetchBenchmark();
-    fetchSensorHealth();
-
-    setInterval(fetchForecast, CONFIG.FORECAST_INTERVAL_MS);
-    setInterval(fetchSensorHealth, CONFIG.HEALTH_INTERVAL_MS);
-    setInterval(fetchBenchmark, CONFIG.BENCHMARK_INTERVAL_MS);
-    setInterval(updatePressureTrend, 60000);
+    if (CURRENT_VIEW === "observations") {
+        initChart();
+        loadHistory().then(fetchCurrent);
+        fetchBenchmark();
+        setInterval(fetchBenchmark, CONFIG.BENCHMARK_INTERVAL_MS);
+    } else if (CURRENT_VIEW === "station") {
+        renderHealth(null, "Đang kiểm tra dữ liệu từng linh kiện…");
+        fetchCurrent().then(fetchSensorHealth);
+        fetchRainHistory();
+        fetchBenchmark();
+        setInterval(fetchSensorHealth, CONFIG.HEALTH_INTERVAL_MS);
+        setInterval(fetchRainHistory, CONFIG.RAIN_HISTORY_INTERVAL_MS);
+        setInterval(fetchBenchmark, CONFIG.BENCHMARK_INTERVAL_MS);
+    } else {
+        initTwoWayControl();
+        loadHistory().then(fetchCurrent);
+        loadThreshold().then(fetchForecast);
+        setInterval(fetchForecast, CONFIG.FORECAST_INTERVAL_MS);
+        setInterval(updatePressureTrend, 60000);
+    }
 });

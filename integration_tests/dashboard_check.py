@@ -27,7 +27,7 @@ def check_dashboard(runtime, report_dir, publish):
                         if "/api/weather/" in response.url and response.status >= 400 else None)
                 page.goto(f"http://127.0.0.1:{server.server_port}/?api={runtime.base_url}&device={runtime.device}",
                           wait_until="domcontentloaded", timeout=45000)
-                expect(page.locator("#connection-status")).to_have_text("WS CONNECTED", timeout=20000)
+                page.wait_for_function("state.ws?.readyState === WebSocket.OPEN", timeout=20000)
                 expect(page.locator("#fc-src-10")).to_have_text("HEURISTIC", timeout=15000)
                 expect(page.locator("#threshold-applied")).to_contain_text("70%", timeout=15000)
                 expect(page.locator("#alert-banner")).to_be_visible(timeout=15000)
@@ -39,6 +39,7 @@ def check_dashboard(runtime, report_dir, publish):
                 page.evaluate("loadThreshold()")
                 publish(temperature=30.1)
                 expect(page.locator("#card-temp")).to_have_text("30.1", timeout=10000)
+                expect(page.locator("#connection-status")).to_have_text("Trực tiếp")
                 page.locator("#threshold-slider").evaluate(
                     "el => { el.value='65'; el.dispatchEvent(new Event('input', {bubbles:true})); }"
                 )
@@ -51,13 +52,35 @@ def check_dashboard(runtime, report_dir, publish):
                 mobile = browser.new_page(viewport={"width": 390, "height": 844})
                 mobile.on("pageerror", lambda error: errors.append(str(error)))
                 mobile.goto(page.url, wait_until="domcontentloaded", timeout=45000)
-                expect(mobile.locator("#connection-status")).to_have_text("WS CONNECTED", timeout=20000)
+                mobile.wait_for_function("state.ws?.readyState === WebSocket.OPEN", timeout=20000)
                 expect(mobile.locator("#card-temp")).to_have_text("30.1", timeout=15000)
                 expect(mobile.locator("#fc-src-10")).to_have_text("HEURISTIC", timeout=15000)
                 mobile.wait_for_function(
                     "document.documentElement.scrollWidth <= window.innerWidth + 1", timeout=5000
                 )
+                expect(mobile.locator('.header-nav a[data-view-link="observations"]')).to_be_visible()
                 mobile.screenshot(path=str(report_dir / "dashboard_mobile.png"), full_page=True)
+                # A connected socket with only old measurements must show the station as offline.
+                page.evaluate("state.lastSampleAt = Date.now() - 31_000")
+                expect(page.locator("#connection-status")).to_have_text("Trạm ngoại tuyến")
+                expect(page.locator("#live-data-warning")).to_contain_text("hơn 30 giây")
+                expect(page.locator("#card-temp")).to_have_text("30.1")
+                assert page.evaluate("state.ws.readyState === WebSocket.OPEN")
+                publish(temperature=30.2)
+                expect(page.locator("#card-temp")).to_have_text("30.2", timeout=10000)
+                expect(page.locator("#connection-status")).to_have_text("Trực tiếp")
+                expect(page.locator("#live-data-warning")).to_be_hidden()
+                page.locator('.header-nav a[data-view-link="observations"]').click()
+                expect(page.locator('#view-title')).to_have_text('Biểu đồ thời tiết')
+                expect(page.locator('.hero')).to_be_hidden()
+                page.wait_for_function(
+                    "document.querySelector('#weather-chart .apexcharts-svg')?.getBoundingClientRect().width > 200",
+                    timeout=15000,
+                )
+                page.locator('.header-nav a[data-view-link="station"]').click()
+                expect(page.locator('#view-title')).to_have_text('Trạm đo & sức khỏe')
+                expect(page.locator("#health-list .component-row")).to_have_count(4, timeout=15000)
+                expect(page.locator('.forecast-section')).to_be_hidden()
                 assert not failures, f"Dashboard API errors: {failures}"
                 assert not errors, f"Dashboard JS errors: {errors}"
                 return {"status": "passed", "api_errors": failures, "javascript_errors": errors,
