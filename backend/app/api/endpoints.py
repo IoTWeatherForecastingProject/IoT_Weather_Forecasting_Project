@@ -16,6 +16,7 @@ from app.services.weather_forecast import build_forecast, NoRecentMeasurements, 
 from app.services import analytics
 from app.services.optional_providers import integration_status
 from app.services.rain_threshold import resolve_rain_threshold
+from app.services.rain_history import rain_history
 
 router = APIRouter(prefix="/api/weather", tags=["Weather"])
 logger = logging.getLogger(__name__)
@@ -89,6 +90,14 @@ def get_weather_history(
     )
     # Đảo ngược lại theo thứ tự thời gian tăng dần để frontend vẽ từ trái sang phải
     return list(reversed(records))
+
+
+@router.get("/rain-history", summary="Lịch sử tấm dò mưa theo ngày trong 7 ngày gần nhất")
+def get_rain_history(
+    device_id: str = Query("station01", min_length=1, max_length=50),
+    db: Session = Depends(get_db),
+):
+    return rain_history(db, device_id)
 
 
 @router.get(

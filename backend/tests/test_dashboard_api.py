@@ -94,6 +94,40 @@ def test_health_empty_is_unknown(context):
     assert response.json()["anomalies"] == []
 
 
+def test_rain_history_groups_by_vietnam_date_and_preserves_gaps(context, monkeypatch):
+    from app.api import endpoints
+    from app.services import rain_history as service
+
+    # The two wet periods begin on opposite sides of midnight in Vietnam.
+    midnight = datetime(2026, 10, 26, 17, tzinfo=timezone.utc)
+    monkeypatch.setattr(endpoints, "rain_history", lambda db, device: service.rain_history(db, device, NOW))
+    for base, samples in [
+        (midnight, [(-15, 0, 29), (-10, 1, 30.2), (0, 1, 32), (5, 0, 31),
+                    (10, 1, 31.5), (60, 1, 33), (65, 0, 32)]),
+        (midnight - timedelta(days=7), [(10, 1, 20)]),
+    ]:
+        for seconds, wet, temperature in samples:
+            age = (NOW - (base + timedelta(seconds=seconds))).total_seconds()
+            context.add(age, rain_detected=wet, temperature=temperature)
+    context.add(device_id="other", rain_detected=1)
+    context.add(-1, rain_detected=1)
+    context.db.commit()
+
+    response = context.client.get("/api/weather/rain-history", params={"device_id": "target"})
+    assert response.status_code == 200
+    result = response.json()
+    assert result["has_readings"] is True
+    newer, older = result["days"]
+    assert (newer["date"], older["date"]) == ("2026-10-27", "2026-10-26")
+    assert [event["status"] for event in newer["events"]] == ["dry", "unknown_end"]
+    assert newer["events"][0]["confirmed_start"] is False
+    assert newer["events"][1]["dry_at"] is None
+    first = older["events"][0]
+    assert first["temperature"] == 30.2
+    assert first["confirmed_start"] is True
+    assert first["dry_at"].startswith("2026-10-26T17:00:05")
+
+
 def test_health_preserves_anomalies_and_filters_station_and_future(context):
     context.add(humidity=125)
     context.add(age_seconds=-10)
