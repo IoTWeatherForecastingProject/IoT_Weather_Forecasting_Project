@@ -397,6 +397,8 @@ def parse_args(argv=None):
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--once", action="store_true")
     mode.add_argument("--loop", action="store_true")
+    mode.add_argument("--loop-recent-15min", action="store_true",
+                      help="Refresh the last two hours of 15-minute Open-Meteo points on an interval")
     mode.add_argument("--recent-15min", action="store_true",
                       help="Fill the last two hours of Open-Meteo reference points")
     mode.add_argument("--backfill-days", type=int, choices=range(1, 93),
@@ -409,12 +411,12 @@ def parse_args(argv=None):
     parser.add_argument("--lon", type=float, default=106.660172)
     parser.add_argument("--csv", type=Path)
     args = parser.parse_args(argv)
-    if args.recent_15min:
+    if args.recent_15min or args.loop_recent_15min:
         if args.source == "openweather":
             parser.error("--recent-15min requires Open-Meteo")
         args.source = "open-meteo"
-    if args.interval is not None and not args.loop:
-        parser.error("--interval requires --loop")
+    if args.interval is not None and not (args.loop or args.loop_recent_15min):
+        parser.error("--interval requires --loop or --loop-recent-15min")
     args.interval = 900 if args.interval is None else args.interval
     if not math.isfinite(args.interval) or args.interval <= 0:
         parser.error("--interval must be finite and positive")
@@ -432,7 +434,7 @@ def run_cycle(args, crawler) -> tuple[int, int]:
     if args.source in ("open-meteo", "all"):
         if args.backfill_days:
             records.extend(crawler.fetch_open_meteo_history(args.backfill_days))
-        elif args.recent_15min:
+        elif args.recent_15min or args.loop_recent_15min:
             records.extend(crawler.fetch_open_meteo_recent())
         else:
             records.extend(crawler.fetch_open_meteo_current())
@@ -476,14 +478,14 @@ def main(argv=None) -> int:
                 run_cycle(args, crawler)
             except CrawlerError as exc:
                 logger.error("Crawler cycle failed: %s", exc)
-                if not args.loop:
+                if not (args.loop or args.loop_recent_15min):
                     return 1
             # Một vòng lỗi vẫn phải tiếp tục; không log exception chứa secret.
             except Exception as exc:  # noqa: BLE001
                 logger.error("Crawler cycle failed (%s)", type(exc).__name__)
-                if not args.loop:
+                if not (args.loop or args.loop_recent_15min):
                     return 1
-            if not args.loop:
+            if not (args.loop or args.loop_recent_15min):
                 return 0
             time.sleep(args.interval)
     except KeyboardInterrupt:
