@@ -178,7 +178,7 @@ def test_forecast_passes_running_worker_client_to_actuation(context, monkeypatch
     assert topic == f"{settings.MQTT_TOPIC_PREFIX}/target/forecast"
     assert json.loads(payload) == {
         "type": "rain_forecast", "device_id": "target",
-        "horizon_minutes": 60, "probability_pct": 65,
+        "horizon_minutes": 60, "probability_pct": 65, "threshold_reached": False,
     }
     assert mqtt_client.publish.call_args.kwargs == {"qos": 0, "retain": False}
 

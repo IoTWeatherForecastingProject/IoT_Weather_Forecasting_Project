@@ -25,6 +25,7 @@
 
 namespace {
 constexpr uint8_t relayPin = ESP8266_RELAY_GPIO, rainPin = 13, dhtPin = 14;
+constexpr uint8_t rgbRedPin = 15, rgbGreenPin = 1, rgbBluePin = 2; // D8, TX, D4.
 constexpr uint32_t sampleInterval = 5000, retryInterval = 5000;
 constexpr uint32_t forecastTimeout = 90000;
 #if defined(COMMISSIONING_RAIN_RELAY) && COMMISSIONING_RAIN_RELAY
@@ -49,6 +50,7 @@ WiFiClient network;
 PubSubClient mqtt(network);
 bool oledReady = false;
 bool forecastReceived = false;
+bool forecastThresholdReached = false;
 uint32_t forecastReceivedAt = 0;
 uint8_t forecastHorizon = 0, forecastPercent = 0;
 uint32_t lastSample = 0, lastRetry = 0, sequence = 0;
@@ -122,8 +124,15 @@ void updateRelay() {
     if (next == relayOn) return;
     relayOn = next;
     digitalWrite(relayPin, relayOn ? RELAY_ACTIVE_LEVEL : !RELAY_ACTIVE_LEVEL);
-    Serial.printf("[RELAY] %s uptime_ms=%lu gpio=%d\n", relayOn ? "ON" : "OFF",
-                  static_cast<unsigned long>(now), digitalRead(relayPin));
+}
+
+void updateIndicators() {
+    const bool wet = digitalRead(rainPin) == LOW;
+    const bool freshForecast = mqtt.connected() && forecastReceived &&
+        millis() - forecastReceivedAt < forecastTimeout;
+    digitalWrite(rgbRedPin, wet ? HIGH : LOW);
+    digitalWrite(rgbBluePin, !wet && freshForecast && forecastThresholdReached ? HIGH : LOW);
+    digitalWrite(rgbGreenPin, !wet && freshForecast && !forecastThresholdReached ? HIGH : LOW);
 }
 
 bool makeTopic(char *target, size_t size, const char *suffix) {
@@ -139,7 +148,7 @@ void receiveForecastAlert(const byte *payload, unsigned int length) {
         !message["action"]["buzzer"].is<bool>() ||
         !message["action"]["buzzer"].as<bool>()) return;
     if (relayOn || digitalRead(rainPin) == LOW) return;
-    if (forecastBuzzer.start(millis())) Serial.println("[FORECAST] Three beeps");
+    forecastBuzzer.start(millis());
 }
 
 void receiveForecast(const byte *payload, unsigned int length) {
@@ -148,12 +157,14 @@ void receiveForecast(const byte *payload, unsigned int length) {
         strcmp(message["type"] | "", "rain_forecast") != 0 ||
         strcmp(message["device_id"] | "", STATION_DEVICE_ID) != 0 ||
         !message["horizon_minutes"].is<int>() ||
-        !message["probability_pct"].is<int>()) return;
+        !message["probability_pct"].is<int>() ||
+        !message["threshold_reached"].is<bool>()) return;
     const int horizon = message["horizon_minutes"].as<int>();
     const int percent = message["probability_pct"].as<int>();
     if ((horizon != 10 && horizon != 30 && horizon != 60) || percent < 0 || percent > 100) return;
     forecastHorizon = horizon;
     forecastPercent = percent;
+    forecastThresholdReached = message["threshold_reached"].as<bool>();
     forecastReceivedAt = millis();
     forecastReceived = true;
 }
@@ -184,14 +195,12 @@ void command(char *topic, byte *payload, unsigned int length) {
     reply["actuation_enabled"] = actuationEnabled;
     char buffer[384];
     serializeJson(reply, buffer, sizeof(buffer));
-    const bool sent = mqtt.publish(replyTopic, buffer, false);
-    Serial.printf("[COMMISSION] pong_sent=%s\n", sent ? "true" : "false");
+    mqtt.publish(replyTopic, buffer, false);
 }
 
 void connect() {
     if (!topicsReady || WiFi.status() != WL_CONNECTED) return;
     if (!mqtt.connect(clientId, MQTT_USERNAME, MQTT_PASSWORD, statusTopic, 1, true, "offline")) {
-        Serial.printf("[COMMISSION] MQTT rc=%d\n", mqtt.state());
         return;
     }
     if (!mqtt.subscribe(commandTopic, 1) ||
@@ -201,7 +210,6 @@ void connect() {
         return;
     }
     mqtt.publish(statusTopic, "online", true);
-    Serial.println("[COMMISSION] MQTT online");
 }
 
 void publishWeather(float temperature, float humidity, float pressure, bool raining) {
@@ -215,8 +223,7 @@ void publishWeather(float temperature, float humidity, float pressure, bool rain
     char buffer[256];
     if (message.overflowed() || measureJson(message) >= sizeof(buffer)) return;
     serializeJson(message, buffer, sizeof(buffer));
-    if (!mqtt.publish(TOPIC_WEATHER_DATA, buffer, false))
-        Serial.println("[MQTT] weather publish failed");
+    mqtt.publish(TOPIC_WEATHER_DATA, buffer, false);
 }
 
 void sample() {
@@ -257,9 +264,7 @@ void sample() {
     char buffer[896];
     if (!doc.overflowed() && measureJson(doc) < sizeof(buffer)) {
         serializeJson(doc, buffer, sizeof(buffer));
-        Serial.println(buffer);
-        if (mqtt.connected() && !mqtt.publish(sampleTopic, buffer, false))
-            Serial.println("[COMMISSION] sample publish failed");
+        if (mqtt.connected()) mqtt.publish(sampleTopic, buffer, false);
     }
     if (publishWeatherEnabled && mqtt.connected() && dhtOk && pressureValid)
         publishWeather(temperature, humidity, pressureHpa, rainLevel == LOW);
@@ -308,10 +313,15 @@ void sample() {
 } // namespace
 
 void setup() {
+    digitalWrite(rgbRedPin, LOW);
+    pinMode(rgbRedPin, OUTPUT);
+    digitalWrite(rgbGreenPin, LOW);
+    pinMode(rgbGreenPin, OUTPUT);
+    digitalWrite(rgbBluePin, LOW);
+    pinMode(rgbBluePin, OUTPUT);
     digitalWrite(relayPin, !RELAY_ACTIVE_LEVEL);
     pinMode(relayPin, OUTPUT);
     pinMode(rainPin, INPUT); // D7 is never a status LED in this environment.
-    Serial.begin(115200);
     dht.begin();
     Wire.begin(4, 5);
     Wire.setClock(100000);
@@ -335,12 +345,11 @@ void setup() {
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    Serial.printf("[COMMISSION] ready=%s relay_mode=%s\n",
-                  topicsReady ? "true" : "false", actuationEnabled ? "rain_do" : "disabled");
 }
 
 void loop() {
     updateRelay();
+    updateIndicators();
     // Defer synchronous I/O during both the pulses and their short gaps.
     if (relayOn || forecastBuzzer.active(millis())) {
         yield();

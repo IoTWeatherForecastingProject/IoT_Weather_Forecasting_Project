@@ -76,6 +76,7 @@ def build_forecast(db: Session, device_id=None, mqtt_client=None, now=None) -> d
                 "device_id": device_id,
                 "horizon_minutes": horizon,
                 "probability_pct": round(forecast[f"plus_{horizon}m"]["rain_probability"] * 100),
+                "threshold_reached": forecast[f"plus_{horizon}m"]["rain_probability"] >= threshold,
             }
             try:
                 mqtt_client.publish(
