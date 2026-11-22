@@ -28,7 +28,7 @@ def check_dashboard(runtime, report_dir, publish):
                 page.goto(f"http://127.0.0.1:{server.server_port}/?api={runtime.base_url}&device={runtime.device}",
                           wait_until="domcontentloaded", timeout=45000)
                 page.wait_for_function("state.ws?.readyState === WebSocket.OPEN", timeout=20000)
-                expect(page.locator("#fc-src-10")).to_have_text("HEURISTIC", timeout=15000)
+                expect(page.locator("#fc-src-10")).to_have_text("ƯỚC TÍNH", timeout=15000)
                 expect(page.locator("#threshold-applied")).to_contain_text("70%", timeout=15000)
                 expect(page.locator("#alert-banner")).to_be_visible(timeout=15000)
                 expect(page.locator("#alert-title")).to_contain_text("XÁC SUẤT ĐẠT NGƯỠNG")
@@ -54,7 +54,7 @@ def check_dashboard(runtime, report_dir, publish):
                 mobile.goto(page.url, wait_until="domcontentloaded", timeout=45000)
                 mobile.wait_for_function("state.ws?.readyState === WebSocket.OPEN", timeout=20000)
                 expect(mobile.locator("#card-temp")).to_have_text("30.1", timeout=15000)
-                expect(mobile.locator("#fc-src-10")).to_have_text("HEURISTIC", timeout=15000)
+                expect(mobile.locator("#fc-src-10")).to_have_text("ƯỚC TÍNH", timeout=15000)
                 mobile.wait_for_function(
                     "document.documentElement.scrollWidth <= window.innerWidth + 1", timeout=5000
                 )
