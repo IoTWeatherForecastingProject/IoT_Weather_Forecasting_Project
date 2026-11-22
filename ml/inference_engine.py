@@ -289,7 +289,7 @@ class TemperatureInferenceEngine:
 
             # 4. Đối chiếu schema và căn chỉnh thứ tự cột khớp 100% với model training
             if self._expected_features:
-                X = X.reindex(columns=self._expected_features, fill_value=0.0)
+                X = X.loc[:, self._expected_features]
 
             # 5. Predict từng horizon với model đã nạp
             preds: Dict[int, float] = {}
@@ -419,12 +419,16 @@ class TemperatureInferenceEngine:
             df["humidity"] = 70.0
         if "pressure" not in df.columns:
             df["pressure"] = 1013.25
-        if "rain_raw" not in df.columns:
-            df["rain_raw"] = 0.0
+        sensor_columns = ["temperature", "humidity", "pressure"]
+        if not self._expected_features or "rain_raw" in self._expected_features:
+            if "rain_raw" not in df.columns or not df["rain_raw"].notna().any():
+                raise ValueError("Temperature model requires measured rain_raw (analog input).")
+            sensor_columns.append("rain_raw")
 
         # Resample về lưới 1 phút (1min grid)
         # Bất kể cảm biến gửi 5s, 10s hay 1min, toàn bộ được đưa về trung bình 1 phút
-        df_1min = df[["temperature", "humidity", "pressure", "rain_raw"]].resample("1min").mean()
+        numeric = df[sensor_columns].apply(pd.to_numeric, errors="coerce").astype(float)
+        df_1min = numeric.resample("1min").mean()
 
         # Fix #2: Giới hạn độ dài khoảng trống được nội suy.
         # Chỉ nội suy tuyến tính cho các khoảng trống <= MAX_INTERP_GAP phút.
@@ -558,10 +562,11 @@ _engine_instance: Optional[TemperatureInferenceEngine] = None
 
 
 def get_engine(model_dir: Union[str, Path] = MODEL_DIR) -> TemperatureInferenceEngine:
-    """Lấy singleton instance của TemperatureInferenceEngine."""
+    """Lấy engine cho thư mục model được cấu hình."""
     global _engine_instance
-    if _engine_instance is None:
-        _engine_instance = TemperatureInferenceEngine(model_dir=model_dir)
+    resolved_dir = Path(model_dir).resolve()
+    if _engine_instance is None or _engine_instance.model_dir != resolved_dir:
+        _engine_instance = TemperatureInferenceEngine(model_dir=resolved_dir)
     return _engine_instance
 
 
