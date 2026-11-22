@@ -147,6 +147,16 @@ IoT_Weather_Forecasting_Project/
 
 ## 5. Hướng dẫn Khởi chạy Nhanh (Quickstart Guide)
 
+Trên Windows, sau khi cài Docker Desktop và môi trường Python theo hướng dẫn Backend, chạy từ thư mục gốc:
+
+```powershell
+.\start-local.ps1
+```
+
+Lệnh này khởi động PostgreSQL, MQTT, Backend, Dashboard và crawler Open‑Meteo. Dùng `.\start-local.ps1 -RestartBackend` sau khi đổi code hoặc cấu hình Backend. Nhật ký của dịch vụ được script khởi động nằm trong `personal/local-weather/logs/`.
+
+Mở [trang Dự báo](http://127.0.0.1:5500/?device=station01&view=forecast) và mở mục **Đánh giá dự báo tại trạm** để xem kết quả đối chiếu trong 7 ngày. Khi thổi vào cảm biến hoặc làm ướt tấm dò để thử, nhập khoảng giờ Việt Nam vào mục này để bỏ các dự báo bị ảnh hưởng khỏi thống kê.
+
 ### Bước 1: Khởi động Hạ tầng (Database & MQTT Broker) qua Docker
 Đảm bảo máy đã cài đặt Docker và Docker Compose:
 ```bash
