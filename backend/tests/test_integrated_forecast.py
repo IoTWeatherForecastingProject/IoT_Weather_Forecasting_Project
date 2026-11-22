@@ -147,6 +147,32 @@ def test_rain_only_boundary_never_loads_legacy_temperature(model_runtime, monkey
     load.assert_not_called()
 
 
+def test_station_temperature_artifact_works_without_analog_rain(tmp_path):
+    import json
+    import joblib
+    TemperatureInferenceEngine = load_symbol("ml.inference_engine", "TemperatureInferenceEngine")
+    FEATURES = load_symbol("ml.train_station_temperature", "FEATURES")
+    train = load_symbol("ml.train_station_temperature", "train")
+    times = pd.date_range(NOW, periods=360, freq="min")
+    frame = pd.DataFrame({
+        "timestamp": times,
+        "temperature": [28 + i * 0.005 for i in range(len(times))],
+        "humidity": 70.0,
+        "pressure": 1010.0,
+        "rain_raw": None,
+    })
+    models, _ = train(frame, times[225])
+    assert set(models) == set(HORIZONS)
+    (tmp_path / "feature_schema.json").write_text(json.dumps({"feature_names": FEATURES}), encoding="utf-8")
+    for horizon, model in models.items():
+        joblib.dump(model, tmp_path / f"Ridge_h{horizon}min.joblib")
+
+    result = TemperatureInferenceEngine(model_dir=tmp_path).predict(frame.tail(120))
+    assert result.confidence == "normal", result.error_msg
+    assert result.model_used == "Ridge"
+    assert result.t_plus_60min > frame.iloc[-1].temperature
+
+
 @pytest.mark.parametrize("missing", [(10,), (30,), HORIZONS])
 def test_partial_temperature_artifacts_have_truthful_metadata(context, model_runtime, monkeypatch, missing):
     seed, client, _ = context
