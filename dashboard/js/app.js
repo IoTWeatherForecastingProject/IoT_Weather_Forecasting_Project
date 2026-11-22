@@ -310,7 +310,9 @@ function initChart() {
         },
         theme: { mode: "dark" },
         stroke: { curve: "smooth", width: [3, 2], dashArray: [0, 5] },
-        markers: { size: [0, 3] },
+        // ApexCharts 3 needs an actual marker for reliable hover on the IoT
+        // area series; zero-sized markers only left the sparse reference clickable.
+        markers: { size: [2, 3], strokeWidth: 0, hover: { size: 5 } },
         colors: ["#73d8de", "#f4bf76"],
         fill: { type: ["gradient", "solid"], gradient: { shade: "dark", opacityFrom: 0.22, opacityTo: 0.01, stops: [0, 95, 100] } },
         series: [],
@@ -339,14 +341,19 @@ function initChart() {
     });
     state.chart.render();
     initChartNavigation(chartElement);
-    const positionTooltip = (event) => {
+    let lastPointer = null;
+    let tooltipFrame = 0;
+    const positionTooltip = () => {
+        if (!lastPointer) return;
         const tooltip = chartElement.querySelector(".apexcharts-tooltip");
-        if (!tooltip?.offsetParent) return;
+        if (!tooltip) return;
         // ApexCharts 3 can anchor a non-shared tooltip to the series rather than
-        // the cursor when series have different timestamps. Position its box here.
-        const bounds = tooltip.offsetParent.getBoundingClientRect();
-        const x = event.clientX - bounds.left;
-        const y = event.clientY - bounds.top;
+        // the cursor when series have different timestamps. The tooltip may be
+        // temporarily hidden while ApexCharts redraws, so offsetParent can be null.
+        const canvas = chartElement.querySelector(".apexcharts-canvas") || chartElement;
+        const bounds = canvas.getBoundingClientRect();
+        const x = lastPointer.x - bounds.left;
+        const y = lastPointer.y - bounds.top;
         const gap = 10;
         const left = x + gap + tooltip.offsetWidth <= bounds.width
             ? x + gap : Math.max(0, x - gap - tooltip.offsetWidth);
@@ -356,8 +363,18 @@ function initChart() {
         tooltip.style.setProperty("--cursor-top", `${top}px`);
         tooltip.classList.add("cursor-positioned");
     };
-    chartElement.addEventListener("mousemove", positionTooltip);
-    chartElement.addEventListener("pointerdown", positionTooltip);
+    const trackTooltip = (event) => {
+        lastPointer = { x: event.clientX, y: event.clientY };
+        positionTooltip();
+        // ApexCharts can create/show the tooltip after the mouse event handler.
+        if (!tooltipFrame) tooltipFrame = requestAnimationFrame(() => {
+            tooltipFrame = 0;
+            positionTooltip();
+        });
+    };
+    chartElement.addEventListener("mousemove", trackTooltip);
+    chartElement.addEventListener("pointerdown", trackTooltip);
+    chartElement.addEventListener("mouseleave", () => { lastPointer = null; });
 
     document.querySelectorAll(".chart-tab").forEach((btn) => {
         btn.addEventListener("click", () => {
@@ -626,6 +643,9 @@ function renderWeatherSummary() {
         .filter((p) => Number.isFinite(p) && p >= 0 && p <= 1);
     if (state.latestRain) {
         setText("hero-summary", "Tấm dò đang báo ướt tại trạm. Theo dõi các mốc dự báo bên dưới để xem xu hướng mưa.");
+    } else if (probabilities.length && forecast.forecast_scope === "VVTS") {
+        const peak = Math.round(Math.max(...probabilities) * 100);
+        setText("hero-summary", `Dự báo khu vực Tân Sơn Nhất có xác suất mưa cao nhất ${peak}%.`);
     } else if (probabilities.length) {
         const peak = Math.round(Math.max(...probabilities) * 100);
         setText("hero-summary", `Trong 60 phút tới, xác suất mưa cao nhất ở ba mốc dự báo là ${peak}%.`);
@@ -941,12 +961,38 @@ async function fetchSensorHealth() {
 
 const RAIN_SOURCE_STYLES = {
     model: ["MÔ HÌNH", "source-tag"],
-    heuristic: ["HEURISTIC", "source-tag"],
+    heuristic: ["ƯỚC TÍNH", "source-tag"],
 };
 
-function renderHorizon(h, horizon) {
+function horizonWaitMessage(horizon) {
+    if (horizon.issue === "observations_unavailable") {
+        const { history_available_minutes: have, history_required_minutes: need } = horizon;
+        if (Number.isInteger(have) && Number.isInteger(need) && have < need) {
+            return `Đã có ${have}/${need} phút số đo liên tục`;
+        }
+        return "Thiếu số đo ở một số mốc cần thiết";
+    }
+    return {
+        observations_stale: "Đang chờ số đo mới từ trạm",
+        model_unavailable: "Mô hình chưa sẵn sàng",
+        model_partial: "Chưa có kết quả mô hình cho chỉ số này",
+    }[horizon.issue];
+}
+
+function renderHorizon(h, horizon, unavailableMessage) {
     horizon = horizon || {};
+    const regional = state.latestForecast?.forecast_scope === "VVTS";
+    const stationModel = state.latestForecast?.forecast_engine === "station_inputs";
+    const temperature = $(`fc-temp-${h}`);
     setText(`fc-temp-${h}`, fmt(horizon.temperature_c, 1, " °C"));
+    const waiting = unavailableMessage || horizonWaitMessage(horizon);
+    if (horizon.temperature_source === "persistence" ||
+        (horizon.temperature_c == null && horizon.rain_probability != null && waiting)) {
+        const note = document.createElement("small");
+        note.className = "forecast-temperature-note";
+        note.textContent = horizon.temperature_source === "persistence" ? "Tạm dùng nhiệt độ mới nhất" : waiting;
+        temperature.append(note);
+    }
     const p = Number(horizon.rain_probability);
     const valid = horizon.rain_probability !== null && horizon.rain_probability !== undefined && Number.isFinite(p) && p >= 0 && p <= 1;
     const pct = valid ? Math.round(Math.min(Math.max(p, 0), 1) * 100) : null;
@@ -954,11 +1000,16 @@ function renderHorizon(h, horizon) {
     $(`fc-bar-${h}`).style.width = valid ? `${pct}%` : "0%";
     const risk = !valid ? "unknown" : p >= 0.7 ? "high" : p >= 0.4 ? "medium" : "low";
     $(`fc-card-${h}`).dataset.risk = risk;
-    setText(`fc-risk-${h}`, { unknown: "Chưa có dự báo", low: "Khả năng thấp", medium: "Cần chú ý", high: "Khả năng cao" }[risk]);
+    setText(`fc-risk-${h}`, {
+        unknown: waiting || (regional && h === "10" ? "Chưa hỗ trợ mốc 10 phút" : "Chưa có dự báo mưa"),
+        low: "Khả năng thấp", medium: "Cần chú ý", high: "Khả năng cao",
+    }[risk]);
     $(`fc-icon-${h}`).querySelector("use").setAttribute("href", valid && p >= 0.4 ? "#i-rain" : "#i-cloud");
 
-    const src = RAIN_SOURCE_STYLES[horizon.rain_source];
+    const src = regional && horizon.rain_source === "model"
+        ? ["TÂN SƠN NHẤT", "source-tag"] : RAIN_SOURCE_STYLES[horizon.rain_source];
     const badge = $(`fc-src-${h}`);
+    badge.title = "";
     if (src) {
         badge.textContent = src[0];
         badge.className = src[1];
@@ -966,7 +1017,8 @@ function renderHorizon(h, horizon) {
         badge.className = "hidden";
     }
     const generated = state.latestForecast ? toMs(state.latestForecast.generated_at) : null;
-    setText(`fc-time-${h}`, generated ? timeLabel(generated + Number(h) * 60000).slice(0, 5) : "--:--");
+    const validAt = regional || stationModel ? toMs(horizon.valid_at) : generated && generated + Number(h) * 60000;
+    setText(`fc-time-${h}`, validAt ? timeLabel(validAt).slice(0, 5) : "--:--");
     return valid ? p : null;
 }
 
@@ -978,34 +1030,134 @@ async function fetchForecast() {
         const probs = {};
         for (const h of ["10", "30", "60"]) probs[h] = renderHorizon(h, data[`plus_${h}m`]);
         const generated = toMs(data.generated_at);
+        const regional = data.forecast_scope === "VVTS";
+        const stationModel = data.forecast_engine === "station_inputs";
+        const reference = toMs(data.forecast_reference_at);
         const forecastStale = generated !== null && Date.now() - generated > 2 * 60 * 1000;
-        setText("fc-updated", generated
-            ? `${forecastStale ? "Dự báo đã cũ · " : "Tạo lúc "}${timeLabel(generated)}`
-            : "Không có thời gian tạo");
+        let updated = "Không có thời gian tạo";
+        if (regional) {
+            updated = reference ? `Bản tin Tân Sơn Nhất lúc ${timeLabel(reference)}` : "Đang chờ bản tin Tân Sơn Nhất";
+        } else if (stationModel) {
+            updated = reference ? `Số đo trạm lúc ${timeLabel(reference)}` : "Đang chờ số đo trạm";
+        } else if (generated) {
+            updated = `${forecastStale ? "Dự báo đã cũ · " : "Tạo lúc "}${timeLabel(generated)}`;
+        }
+        setText("fc-updated", updated);
         const valid = Object.values(probs).filter((p) => p !== null);
         if (valid.length) {
             const peak = Math.round(Math.max(...valid) * 100);
             setText("rain-peak", `${peak}%`);
-            setText("rain-outlook", forecastStale ? "Dự báo đã cũ. Hãy làm mới trước khi sử dụng."
+            setText("rain-outlook", regional ? "Dự báo khu vực Tân Sơn Nhất. Còi dự báo tại trạm chưa áp dụng nguồn này."
+                : stationModel ? "Dự báo từ số đo trạm. Còi cảnh báo theo ngưỡng đang áp dụng."
+                : forecastStale ? "Dự báo đã cũ. Hãy làm mới trước khi sử dụng."
                 : data.alert_triggered
                 ? "Dự báo đã đạt ngưỡng cảnh báo đang áp dụng."
                 : peak >= 40 ? "Có khả năng mưa ở một hoặc nhiều mốc dự báo." : "Khả năng mưa ở các mốc dự báo hiện thấp.");
         } else {
             setText("rain-peak", "--%");
-            setText("rain-outlook", "Chưa có xác suất mưa hợp lệ.");
+            const issue = {
+                model_unavailable: "Mô hình dự báo chưa sẵn sàng.",
+                observations_stale: stationModel ? "Số đo trạm đã cũ. Chờ trạm gửi số mới."
+                    : "Bản tin Tân Sơn Nhất đã cũ. Chờ bản tin mới.",
+                observations_unavailable: stationModel ? "Cần số đo gần thời điểm hiện tại, 30 và 60 phút trước."
+                    : "Chưa có đủ bản tin Tân Sơn Nhất liên tiếp để dự báo.",
+            }[data.forecast_issue];
+            setText("rain-outlook", issue || "Chưa có xác suất mưa hợp lệ.");
         }
         renderWeatherSummary();
         renderAlert(data, probs);
     } catch (err) {
-        markBackend("forecast", false, err);
+        const reason = err.detail?.code;
+        const unavailable = {
+            no_recent_measurements: "Đang chờ số đo từ trạm",
+            sensor_data_unusable: "Số đo mới nhất ngoài khoảng hợp lệ",
+        }[reason];
+        markBackend("forecast", Boolean(unavailable), err);
         state.latestForecast = null;
-        for (const h of ["10", "30", "60"]) renderHorizon(h, null);
-        setText("fc-updated", "Không tải được dự báo");
+        const message = unavailable || "Không tải được dự báo";
+        for (const h of ["10", "30", "60"]) renderHorizon(h, null, message);
+        setText("fc-updated", message);
         setText("rain-peak", "--%");
-        setText("rain-outlook", "Không tải được dự báo. Thử làm mới sau.");
+        setText("rain-outlook", message);
         renderWeatherSummary();
         $("alert-banner").classList.add("hidden");
     }
+}
+
+async function refreshForecastEvaluation() {
+    const list = $("evaluation-list");
+    const button = $("refresh-evaluation");
+    button.disabled = true;
+    try {
+        const result = await apiGet("/forecast/evaluation", { device_id: CONFIG.DEVICE_ID });
+        list.replaceChildren();
+        const logged = result.horizons.some((row) => row.forecasts > 0);
+        setText("evaluation-note", logged
+            ? `Đã đánh dấu ${result.test_periods} khoảng thử. Mỗi mẫu mưa là một dự báo được đối chiếu với tấm dò; nhiều dự báo có thể cùng rơi vào một đợt mưa.`
+            : "Chưa lưu được dự báo từ mô hình. Dữ liệu sẽ xuất hiện sau khi trạm có đủ số đo.");
+        if (!logged) return;
+        for (const row of result.horizons) {
+            const item = document.createElement("li");
+            const title = document.createElement("strong");
+            title.textContent = `+${row.horizon_minutes} phút`;
+            const temperature = document.createElement("p");
+            temperature.textContent = row.temperature_samples
+                ? `Nhiệt độ lệch trung bình ${fmt(row.temperature_mae_c, 2)} °C · Giữ nguyên số đo: ${fmt(row.baseline_mae_c, 2)} °C · ${row.temperature_samples} mẫu`
+                : "Nhiệt độ chưa có mẫu đối chiếu";
+            const rain = document.createElement("p");
+            rain.textContent = row.rain_samples
+                ? `Mưa: ${row.rain_samples} mẫu · ${row.rain_events} có ướt · ${row.hits} báo đúng · ${row.false_alarms} báo nhầm · ${row.misses} bỏ sót`
+                : "Mưa chưa có mẫu đối chiếu";
+            const count = document.createElement("p");
+            count.textContent = `${row.forecasts} dự báo đã lưu · ${row.pending} đang chờ · ${row.excluded} loại vì trùng khoảng thử`;
+            item.append(title, temperature, rain, count);
+            list.appendChild(item);
+        }
+    } catch (_) {
+        list.replaceChildren();
+        setText("evaluation-note", "Không tải được đánh giá dự báo.");
+    } finally {
+        button.disabled = false;
+    }
+}
+
+function initForecastEvaluation() {
+    const details = $("forecast-evaluation");
+    const form = $("evaluation-test-form");
+    details.addEventListener("toggle", () => {
+        if (details.open) refreshForecastEvaluation();
+    });
+    $("refresh-evaluation").addEventListener("click", refreshForecastEvaluation);
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const starts = form.elements.starts_at.value;
+        const ends = form.elements.ends_at.value;
+        if (!starts || !ends || starts >= ends) {
+            setText("evaluation-test-status", "Chọn giờ kết thúc sau giờ bắt đầu.");
+            return;
+        }
+        const button = form.querySelector("button");
+        button.disabled = true;
+        try {
+            const res = await fetch(`${CONFIG.API_BASE}/forecast/evaluation/test-periods`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    device_id: CONFIG.DEVICE_ID,
+                    starts_at: new Date(`${starts}+07:00`).toISOString(),
+                    ends_at: new Date(`${ends}+07:00`).toISOString(),
+                }),
+            });
+            if (!res.ok) throw new Error(String(res.status));
+            setText("evaluation-test-status", "Đã lưu khoảng thử. Kết quả đã lưu sẽ được tính lại.");
+            form.reset();
+            await refreshForecastEvaluation();
+        } catch (_) {
+            setText("evaluation-test-status", "Không lưu được khoảng thử. Mỗi khoảng dài tối đa 7 ngày.");
+        } finally {
+            button.disabled = false;
+        }
+    });
 }
 
 function renderAlert(data, probs) {
@@ -1137,6 +1289,7 @@ document.addEventListener("DOMContentLoaded", () => {
         setInterval(fetchBenchmark, CONFIG.BENCHMARK_INTERVAL_MS);
     } else {
         initTwoWayControl();
+        initForecastEvaluation();
         loadHistory().then(fetchCurrent);
         loadThreshold().then(fetchForecast);
         setInterval(fetchForecast, CONFIG.FORECAST_INTERVAL_MS);

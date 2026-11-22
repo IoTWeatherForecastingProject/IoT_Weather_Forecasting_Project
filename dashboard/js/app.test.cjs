@@ -38,14 +38,28 @@ run(`state.latestForecast = {generated_at: new Date().toISOString(), plus_10m:{r
 run(`renderHorizon("10", {temperature_c:31.2,rain_probability:0.82,rain_source:"heuristic"});`);
 assert.equal(nodes.get("fc-rain-10").textContent, "82%");
 assert.equal(nodes.get("fc-card-10").dataset.risk, "high");
-assert.equal(nodes.get("fc-src-10").textContent, "HEURISTIC");
+assert.equal(nodes.get("fc-src-10").textContent, "ƯỚC TÍNH");
 assert.equal(nodes.get("fc-icon-10").use.href, "#i-rain");
 assert.equal(nodes.get("fc-temp-10").textContent, "31.2 °C");
+
+run(`state.latestForecast.forecast_scope = "VVTS";
+renderHorizon("10", {temperature_c:null, rain_probability:null, rain_source:"unavailable"});
+renderHorizon("60", {temperature_c:30, rain_probability:0.12, rain_source:"model", valid_at:"2026-11-15T09:30:00Z"});`);
+assert.equal(nodes.get("fc-rain-10").textContent, "--%");
+assert.equal(nodes.get("fc-time-10").textContent, "--:--");
+assert.equal(nodes.get("fc-src-60").textContent, "TÂN SƠN NHẤT");
+assert.equal(nodes.get("fc-rain-60").textContent, "12%");
+run(`delete state.latestForecast.forecast_scope;`);
 
 run(`renderHorizon("30", {temperature_c:null,rain_probability:null});`);
 assert.equal(nodes.get("fc-rain-30").textContent, "--%");
 assert.equal(nodes.get("fc-card-30").dataset.risk, "unknown");
 assert.equal(nodes.get("fc-temp-30").textContent, "--");
+
+run(`renderHorizon("10", {temperature_c:31.2, temperature_source:"persistence", rain_probability:null,
+    issue:"observations_unavailable", history_available_minutes:15, history_required_minutes:30});`);
+assert.equal(nodes.get("fc-risk-10").textContent, "Đã có 15/30 phút số đo liên tục");
+assert.equal(nodes.get("fc-temp-10").children.at(-1).textContent, "Tạm dùng nhiệt độ mới nhất");
 
 run(`updateTelemetryCards({timestamp:new Date().toISOString(),temperature:30.1,humidity:76,pressure:1008,rain_detected:0,rain_raw:3570});`);
 assert.equal(nodes.get("card-temp").textContent, "30.1");

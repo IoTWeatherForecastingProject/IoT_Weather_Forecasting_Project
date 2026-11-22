@@ -23,12 +23,15 @@ def test_migrations_new_and_existing_schema_preserve_data_and_are_repeatable(exi
                 db.exec_driver_sql("INSERT INTO weather_measurements(device_id,temperature,humidity,pressure) "
                                    "VALUES ('old',30,75,1000),('old',30,75,1000)")
             isolated = SimpleNamespace(dialect=engine.dialect, begin=lambda: nullcontext(db))
-            assert len(apply_migrations(isolated)) == 3
+            expected = sorted(path.name for path in MIGRATIONS.glob("[0-9]*.sql"))
+            assert apply_migrations(isolated) == expected
             assert apply_migrations(isolated) == []
             count = db.execute(text("SELECT COUNT(*) FROM weather_measurements")).scalar_one()
             assert count == (2 if existing_data else 0)
-            assert db.execute(text("SELECT COUNT(*) FROM schema_migrations")).scalar_one() == 3
+            assert db.execute(text("SELECT COUNT(*) FROM schema_migrations")).scalar_one() == len(expected)
             assert db.execute(text("SELECT COUNT(*) FROM reference_weather")).scalar_one() == 0
+            assert db.execute(text("SELECT COUNT(*) FROM forecast_snapshots")).scalar_one() == 0
+            assert db.execute(text("SELECT COUNT(*) FROM forecast_test_periods")).scalar_one() == 0
         finally:
             transaction.rollback()
 

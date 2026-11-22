@@ -2,6 +2,7 @@
 from threading import Lock
 
 import pandas as pd
+from app.config import settings
 from app.services.optional_providers import load_symbol
 
 HORIZONS = (10, 30, 60)
@@ -22,7 +23,8 @@ def predict_forecast(recent_data: pd.DataFrame, threshold: float = 0.70) -> dict
     # TV2's singleton keeps mutable coverage diagnostics. HTTP and the monitor
     # run in different threads, so serialize prediction and its model snapshot.
     with _temperature_lock:
-        engine = get_engine()
+        model_dir = settings.TEMPERATURE_MODEL_DIR
+        engine = get_engine(model_dir) if model_dir else get_engine()
         temperature = engine.predict(recent_data)
         health = engine.health_check()
         available = health["horizons_available"]

@@ -67,3 +67,26 @@ class SystemConfig(Base):
     config_value = Column(String(255), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
+
+class ForecastSnapshot(Base):
+    __tablename__ = "forecast_snapshots"
+
+    device_id = Column(String(50), primary_key=True)
+    slot_at = Column(DateTime(timezone=True), primary_key=True)
+    horizon_minutes = Column(SmallInteger, primary_key=True)
+    issued_at = Column(DateTime(timezone=True), nullable=False)
+    reference_at = Column(DateTime(timezone=True), nullable=False)
+    valid_at = Column(DateTime(timezone=True), nullable=False)
+    temperature_c = Column(Numeric(5, 2))
+    baseline_temperature_c = Column(Numeric(5, 2), nullable=False)
+    rain_probability = Column(Numeric(5, 4))
+    rain_threshold = Column(Numeric(5, 4), nullable=False)
+
+
+class ForecastTestPeriod(Base):
+    __tablename__ = "forecast_test_periods"
+
+    device_id = Column(String(50), primary_key=True)
+    starts_at = Column(DateTime(timezone=True), primary_key=True)
+    ends_at = Column(DateTime(timezone=True), primary_key=True)
+

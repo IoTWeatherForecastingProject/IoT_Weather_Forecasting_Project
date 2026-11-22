@@ -172,6 +172,27 @@ Hàm `predict_forecast(recent_data, threshold=0.70)` trong `inference/unified_fo
 
 ## 5. Hướng dẫn Cài đặt & Chạy Thực nghiệm
 
+### Kiểm định mưa theo bản tin Tân Sơn Nhất
+
+Tải bản tin trạm `VVTS` (mạng `VN__ASOS`), múi giờ UTC, từ [kho METAR của IEM](https://mesonet.agron.iastate.edu/request/download.phtml?network=VN__ASOS). Lưu năm 2025 để huấn luyện và hiệu chuẩn, từ tháng 1 đến tháng 10 năm 2026 để kiểm định. CSV cần các cột `station,valid,metar`. Chạy từ thư mục gốc:
+
+```powershell
+& backend/.venv/Scripts/python.exe -m ai_engine.rain_classification.benchmark_vvts ai_engine/data/raw/vvts_metar_2025.csv --holdout ai_engine/data/raw/vvts_metar_2026_holdout.csv --calibration-start 2025-09-01 --test-start 2026-01-01 --model-out ai_engine/saved_models/vvts_forecast.joblib
+```
+
+Bài thử dự báo nhiệt độ và khả năng mưa được báo tại sân bay ở một hoặc hai bản tin tiếp theo. Quá trình dùng chung cách đọc bản tin giữa huấn luyện và API trực tiếp, giữ nguyên các khoảng thiếu, loại xu hướng dự báo `TEMPO/BECMG` khỏi nhãn mưa hiện tại và tách tập theo thời gian. Báo cáo JSON ghi sai số đối chiếu và SHA-256 của từng file dữ liệu. Artifact chỉ lưu các mô hình vượt phương án đối chiếu tương ứng. Kết quả áp dụng cho Tân Sơn Nhất ở mốc +30 và +60 phút.
+
+Để huấn luyện biến thể dùng đầu vào tương thích với trạm IoT, thêm `--station-inputs` và đổi `--model-out` sang `ai_engine/saved_models/station_input_forecast.joblib`. CSV cần thêm cột `relh` từ IEM. Hai tập dữ liệu vẫn là quan trắc công khai VVTS. Biến thể này dùng độ ẩm đo được và bỏ mã mưa hiện tại, áp suất tuyệt đối cùng các đầu vào riêng của sân bay. Sai số trong báo cáo đo trên VVTS, còn chất lượng tại trạm IoT cần kiểm định riêng.
+
+### Mô hình 10 phút dùng dữ liệu NEA Singapore
+
+Nguồn mở [mưa mỗi 5 phút](https://data.gov.sg/datasets/d_6580738cdd7db79374ed3152159fbd69/view), [nhiệt độ mỗi phút](https://data.gov.sg/datasets/d_66b77726bbae1b33f218db60ff5861f0/view) và [độ ẩm mỗi phút](https://data.gov.sg/datasets/d_2d3b0c4da128a9a59efca806441e1429/view) đều từ NEA. Tập mẫu lấy ngày 15 mỗi tháng trong 2022 và 2023, ghép cùng mã điểm đo. Huấn luyện trên năm 2022, hiệu chuẩn trong nửa đầu 2023, kiểm định trong nửa cuối 2023 trên ba trạm được giữ riêng (S24, S104, S107). Nhãn mưa dựa trên hai khoảng đo 5 phút tiếp theo. Mốc 10 phút dùng nhiệt độ và độ ẩm, cùng thay đổi trong 5, 10 và 30 phút. Kết quả kiểm định áp dụng cho dữ liệu NEA.
+
+```powershell
+& backend/.venv/Scripts/python.exe -m ai_engine.rain_classification.download_nea ai_engine/data/raw/nea_5min_2022_2023.csv.gz
+& backend/.venv/Scripts/python.exe -m ai_engine.rain_classification.train_nea_short ai_engine/data/raw/nea_5min_2022_2023.csv.gz --model-out ai_engine/saved_models/station_short_forecast.joblib --report ai_engine/data/raw/station_short_validation.json
+```
+
 ```bash
 cd ai_engine
 python -m venv .venv

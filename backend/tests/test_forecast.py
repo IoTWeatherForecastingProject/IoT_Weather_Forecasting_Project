@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from fastapi.testclient import TestClient
+import numpy as np
+import pandas as pd
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -13,7 +15,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import endpoints
 from app.config import settings
-from app.db.models import SystemConfig, WeatherMeasurement
+from app.db.models import ForecastSnapshot, ForecastTestPeriod, SystemConfig, WeatherMeasurement
 from app.db.session import Base, get_db
 from app.main import app
 from app.services import forecast_client
@@ -27,7 +29,10 @@ HORIZONS = ("plus_10m", "plus_30m", "plus_60m")
 @pytest.fixture
 def context(monkeypatch):
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    Base.metadata.create_all(engine, tables=[WeatherMeasurement.__table__, SystemConfig.__table__])
+    Base.metadata.create_all(engine, tables=[
+        WeatherMeasurement.__table__, SystemConfig.__table__,
+        ForecastSnapshot.__table__, ForecastTestPeriod.__table__,
+    ])
     db = Session(engine)
     ids = count(1)
 
@@ -183,6 +188,197 @@ def test_forecast_passes_running_worker_client_to_actuation(context, monkeypatch
     assert mqtt_client.publish.call_args.kwargs == {"qos": 0, "retain": False}
 
 
+def test_regional_forecast_displays_without_using_iot_data_or_triggering_alarm(context, monkeypatch):
+    from app.services import regional_forecast
+
+    monkeypatch.setattr(settings, "FORECAST_ENGINE_MODE", "regional_vvts")
+    monkeypatch.setattr(settings, "REGIONAL_FORECAST_DEVICE_ID", "station01")
+    mqtt = Mock()
+    monkeypatch.setattr(app.state, "mqtt_worker", SimpleNamespace(client=mqtt), raising=False)
+    classifier = Mock()
+    classifier.predict_proba.return_value = np.array([[0.1, 0.9]])
+    monkeypatch.setattr(regional_forecast, "load_model", Mock(return_value={
+        "features": ["temperature", "rain_now"],
+        "models": {
+            30: {"temperature": Mock(predict=Mock(return_value=[0.5])),
+                 "rain": (classifier, Mock(predict=Mock(return_value=[0.9])))},
+        },
+    }))
+    observations = pd.DataFrame([
+        {"station": "VVTS", "valid": NOW, "metar": "METAR VVTS 271100Z 9999 30/25 Q1008 TEMPO -RA"},
+    ])
+    monkeypatch.setattr(regional_forecast, "read_observations", lambda: observations)
+
+    response = context.client.get("/api/weather/forecast", params={"device_id": "station01"})
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["forecast_scope"] == "VVTS"
+    assert result["plus_10m"]["rain_probability"] is None
+    assert result["plus_30m"]["rain_probability"] == 0.9
+    assert result["plus_30m"]["temperature_c"] == 30.5
+    assert classifier.predict_proba.call_args.args[0]["rain_now"].iloc[0] == 0
+    assert result["alert_triggered"] is False
+    context.trigger.assert_not_called()
+    assert json.loads(mqtt.publish.call_args.args[1])["threshold_reached"] is False
+
+    mqtt.reset_mock()
+    observations["valid"] = NOW - timedelta(hours=2)
+    result = context.client.get("/api/weather/forecast", params={"device_id": "station01"}).json()
+    assert result["forecast_issue"] == "observations_stale"
+    assert result["plus_30m"]["rain_probability"] is None
+    mqtt.publish.assert_not_called()
+
+
+def test_station_model_receives_only_measurements_from_requested_device(context, monkeypatch):
+    from app.services import regional_forecast, station_input_forecast
+
+    monkeypatch.setattr(settings, "FORECAST_ENGINE_MODE", "station_inputs")
+    monkeypatch.setattr(regional_forecast, "read_observations", Mock(side_effect=AssertionError("airport feed")))
+    context.add("station01", age_minutes=60).pressure = 1007
+    context.add("station01", age_minutes=30).humidity = 72
+    context.add("station01").temperature = 32
+    context.add("other").temperature = 45
+    mqtt = Mock()
+    monkeypatch.setattr(app.state, "mqtt_worker", SimpleNamespace(client=mqtt), raising=False)
+    classifier = Mock()
+    classifier.predict_proba.return_value = np.array([[0.1, 0.9]])
+    temperature = Mock()
+    temperature.predict.return_value = [0.5]
+    monkeypatch.setattr(station_input_forecast, "load_model", Mock(return_value={
+        "features": ["temperature", "humidity_change_30m", "pressure_change_60m"],
+        "models": {30: {"temperature": temperature, "rain": (classifier, Mock(predict=Mock(return_value=[0.9])))}},
+    }))
+    short_classifier = Mock()
+    short_classifier.predict_proba.return_value = np.array([[0.8, 0.2]])
+    monkeypatch.setattr(station_input_forecast, "load_short_model", Mock(return_value={
+        "features": ["temperature", "humidity_change_10m"],
+        "model": {"temperature": None, "rain": (short_classifier, Mock(predict=Mock(return_value=[0.2])))},
+    }))
+    context.add("station01", age_minutes=10).humidity = 71
+
+    response = context.client.get("/api/weather/forecast", params={"device_id": "station01"})
+    assert response.status_code == 200, response.text
+    result = response.json()
+    expected = {"temperature": 32, "humidity_change_30m": 3, "pressure_change_60m": 1}
+    assert temperature.predict.call_args.args[0].iloc[0].to_dict() == expected
+    assert classifier.predict_proba.call_args.args[0].iloc[0].to_dict() == expected
+    assert result["forecast_engine"] == "station_inputs" and result["forecast_scope"] == "station"
+    assert short_classifier.predict_proba.call_args.args[0].iloc[0].to_dict() == {
+        "temperature": 32, "humidity_change_10m": 4,
+    }
+    assert result["plus_10m"]["rain_probability"] == 0.2
+    assert result["plus_30m"]["temperature_c"] == 32.5
+    assert result["plus_30m"]["rain_probability"] == 0.9
+    assert result["alert_triggered"] is True
+    context.trigger.assert_called_once_with(
+        device_id="station01", rain_probability=0.9, horizon_minutes=30,
+        mqtt_client=mqtt, threshold=0.7,
+    )
+    context.predictor.assert_not_called()
+    assert json.loads(mqtt.publish.call_args.args[1])["threshold_reached"] is True
+
+    context.trigger.reset_mock()
+    monkeypatch.setattr(settings, "RAIN_ALERT_THRESHOLD", 0.95)
+    below_threshold = context.client.get("/api/weather/forecast", params={"device_id": "station01"}).json()
+    assert below_threshold["alert_triggered"] is False
+    context.trigger.assert_not_called()
+    assert json.loads(mqtt.publish.call_args.args[1])["threshold_reached"] is False
+    saved = context.db.query(ForecastSnapshot).order_by(ForecastSnapshot.horizon_minutes).all()
+    assert [point.horizon_minutes for point in saved] == [10, 30]
+    assert float(saved[1].rain_threshold) == 0.7
+
+    mqtt.reset_mock()
+    missing = context.client.get("/api/weather/forecast", params={"device_id": "other"}).json()
+    assert missing["forecast_issue"] == "observations_unavailable"
+    assert missing["plus_10m"]["temperature_source"] == "persistence"
+    assert missing["plus_10m"]["issue"] == "observations_unavailable"
+    assert missing["plus_10m"]["history_required_minutes"] == 30
+    assert missing["plus_10m"]["history_available_minutes"] == 0
+    assert missing["plus_10m"]["rain_probability"] is None
+    assert missing["plus_30m"]["rain_probability"] is None
+    mqtt.publish.assert_not_called()
+
+
+def test_station_short_model_can_alert_before_long_history_is_ready(context, monkeypatch):
+    from app.services import station_input_forecast
+
+    monkeypatch.setattr(settings, "FORECAST_ENGINE_MODE", "station_inputs")
+    for age in range(0, 36, 5):
+        context.add("station01", age_minutes=age)
+    classifier = Mock()
+    classifier.predict_proba.return_value = np.array([[0.1, 0.9]])
+    monkeypatch.setattr(station_input_forecast, "load_short_model", Mock(return_value={
+        "features": ["temperature"],
+        "model": {"temperature": None, "rain": (classifier, Mock(predict=Mock(return_value=[0.9])))},
+    }))
+    monkeypatch.setattr(station_input_forecast, "load_model", Mock(return_value={"features": [], "models": {}}))
+    mqtt = Mock()
+    monkeypatch.setattr(app.state, "mqtt_worker", SimpleNamespace(client=mqtt), raising=False)
+
+    forecast = context.client.get("/api/weather/forecast", params={"device_id": "station01"}).json()
+    assert forecast["forecast_issue"] == "observations_unavailable"
+    assert forecast["plus_10m"]["rain_probability"] == 0.9
+    assert forecast["plus_30m"]["rain_probability"] is None
+    assert forecast["plus_30m"]["issue"] == "observations_unavailable"
+    assert forecast["alert_triggered"] is True
+    context.trigger.assert_called_once()
+    assert context.trigger.call_args.kwargs["horizon_minutes"] == 10
+    assert json.loads(mqtt.publish.call_args.args[1])["threshold_reached"] is True
+
+
+def test_station_model_does_not_alert_from_stale_measurements(context, monkeypatch):
+    monkeypatch.setattr(settings, "FORECAST_ENGINE_MODE", "station_inputs")
+    for age in (3, 33, 63):
+        context.add("station01", age_minutes=age)
+    mqtt = Mock()
+    monkeypatch.setattr(app.state, "mqtt_worker", SimpleNamespace(client=mqtt), raising=False)
+
+    forecast = context.client.get("/api/weather/forecast", params={"device_id": "station01"}).json()
+    assert forecast["forecast_issue"] == "observations_stale"
+    assert all(forecast[h]["issue"] == "observations_stale" for h in HORIZONS)
+    assert forecast["alert_triggered"] is False
+    context.trigger.assert_not_called()
+    mqtt.publish.assert_not_called()
+
+
+def test_evaluation_scores_completed_forecasts_and_excludes_test_intervals(context):
+    for horizon in (10, 30, 60):
+        context.db.add(ForecastSnapshot(
+            device_id="station01", slot_at=NOW, horizon_minutes=horizon,
+            issued_at=NOW, reference_at=NOW, valid_at=NOW + timedelta(minutes=horizon),
+            temperature_c=31, baseline_temperature_c=28, rain_probability=0.8, rain_threshold=0.75,
+        ))
+    for seconds in (-30, -15, 0, 15, 30):
+        context.add("station01", age_minutes=-10 - seconds / 60).temperature = 30
+    context.add("station01", age_minutes=-5).rain_detected = 1
+    context.db.commit()
+    endpoints.datetime.now.return_value = NOW + timedelta(minutes=40)
+    path = "/api/weather/forecast/evaluation"
+    result = context.client.get(path).json()
+    short, medium, long = result["horizons"]
+    assert short["temperature_mae_c"] == 1
+    assert short["baseline_mae_c"] == 2
+    assert short["rain_brier"] == 0.04 and short["hits"] == 1
+    assert medium["rain_samples"] == 1 and medium["rain_events"] == 1
+    assert long["pending"] == 1 and long["rain_samples"] == 0
+
+    # A wet reading is positive evidence. Without it, a gap must not count as dry.
+    wet = context.db.query(WeatherMeasurement).filter_by(rain_detected=1).one()
+    wet.rain_detected = 0
+    context.db.commit()
+    assert context.client.get(path).json()["horizons"][0]["rain_samples"] == 0
+    test_period = {
+        "device_id": "station01",
+        "starts_at": (NOW - timedelta(minutes=4)).isoformat(),
+        "ends_at": (NOW - timedelta(minutes=3)).isoformat(),
+    }
+    assert context.client.post(path + "/test-periods", json=test_period).status_code == 200
+    assert context.client.post(path + "/test-periods", json=test_period).status_code == 200
+    result = context.client.get(path).json()
+    assert result["test_periods"] == 1
+    assert all(row["excluded"] == 1 and row["temperature_samples"] == 0 for row in result["horizons"])
+
+
 def test_old_measurements_can_be_viewed_without_actuating_the_station(context, monkeypatch):
     context.add(age_minutes=3)
     mqtt_client = Mock()
@@ -221,6 +417,8 @@ def test_local_fallback_labels_sources_and_uses_inclusive_configured_threshold(
     assert (result["alert_message"] is not None) is expected_alert
     for horizon in HORIZONS:
         assert result[horizon]["rain_source"] == "heuristic"
+        assert result[horizon]["temperature_source"] == "persistence"
+        assert result[horizon]["temperature_c"] == 31.5
     assert max(result[h]["rain_probability"] for h in HORIZONS) == 0.18
 
 

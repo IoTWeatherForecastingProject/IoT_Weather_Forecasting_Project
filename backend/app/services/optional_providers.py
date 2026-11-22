@@ -19,7 +19,12 @@ def integration_status():
     return {
         "forecast": {
             "owner": "TV2/TV3", "mode": settings.FORECAST_ENGINE_MODE,
-            "status": "local_heuristic" if settings.FORECAST_ENGINE_MODE == "heuristic" else "external_opt_in_unverified",
+            "status": {
+                "heuristic": "local_heuristic",
+                "auto": "external_opt_in_unverified",
+                "regional_vvts": "regional_vvts",
+                "station_inputs": "station_inputs",
+            }[settings.FORECAST_ENGINE_MODE],
         },
         "analytics": {
             "owner": "TV3", "mode": settings.ANALYTICS_ENGINE_MODE,
