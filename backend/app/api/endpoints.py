@@ -6,13 +6,15 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from app.db.session import get_db
-from app.db.models import WeatherMeasurement, SystemConfig
+from app.db.models import ForecastTestPeriod, WeatherMeasurement, SystemConfig
 from app.schemas.weather import (
     WeatherMeasurementResponse,
     ForecastResponse,
+    ForecastTestPeriodRequest,
     ThresholdUpdateRequest
 )
 from app.services.weather_forecast import build_forecast, NoRecentMeasurements, UnusableMeasurements
+from app.services.forecast_evaluation import forecast_evaluation, insert_once
 from app.services import analytics
 from app.services.optional_providers import integration_status
 from app.services.rain_threshold import resolve_rain_threshold
@@ -129,6 +131,22 @@ def get_weather_forecast(
         ) from exc
     except UnusableMeasurements as exc:
         raise HTTPException(status_code=409, detail={"code": "sensor_data_unusable", "message": str(exc)}) from exc
+
+
+@router.get("/forecast/evaluation", summary="Đối chiếu dự báo đã lưu với số đo tại trạm")
+def get_forecast_evaluation(
+    device_id: str = Query("station01", min_length=1, max_length=50),
+    days: int = Query(7, ge=1, le=7),
+    db: Session = Depends(get_db),
+):
+    return forecast_evaluation(db, device_id, days, now=datetime.now(timezone.utc))
+
+
+@router.post("/forecast/evaluation/test-periods", summary="Đánh dấu thời gian thử cảm biến")
+def mark_forecast_test_period(payload: ForecastTestPeriodRequest, db: Session = Depends(get_db)):
+    insert_once(db, ForecastTestPeriod, [payload.model_dump()])
+    db.commit()
+    return {"status": "saved"}
 
 
 @router.get("/alerts/threshold", summary="Đọc ngưỡng cảnh báo hiện tại")

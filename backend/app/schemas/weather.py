@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal, Optional
-from pydantic import AwareDatetime, BaseModel, Field, ConfigDict, field_validator
+from pydantic import AwareDatetime, BaseModel, Field, ConfigDict, field_validator, model_validator
 
 
 class WeatherMeasurementCreate(BaseModel):
@@ -45,13 +45,26 @@ class WeatherMeasurementResponse(BaseModel):
 
 class ForecastHorizon(BaseModel):
     """Schema kết quả dự báo tại một mốc thời gian cụ thể."""
-    temperature_c: float = Field(..., allow_inf_nan=False, description="Nhiệt độ dự báo (°C)", examples=[30.5])
-    temperature_source: Optional[Literal["model", "persistence", "heuristic"]] = Field(
+    temperature_c: float | None = Field(..., allow_inf_nan=False, description="Nhiệt độ dự báo (°C)", examples=[30.5])
+    temperature_source: Optional[Literal["model", "persistence", "heuristic", "unavailable"]] = Field(
         None, description="Nguồn nhiệt độ tại horizon này; null nếu provider cũ không cung cấp"
     )
-    rain_probability: float = Field(..., ge=0, le=1, allow_inf_nan=False, description="Xác suất mưa dự báo (0.0 đến 1.0)", examples=[0.72])
-    rain_level: Literal["Low", "Medium", "High"] = Field(..., description="Mức độ mưa (Low, Medium, High)", examples=["High"])
-    rain_source: Literal["model", "heuristic"] = Field(..., description="Nguồn xác suất mưa: model đã huấn luyện hoặc heuristic")
+    rain_probability: float | None = Field(..., ge=0, le=1, allow_inf_nan=False, description="Xác suất mưa dự báo (0.0 đến 1.0)", examples=[0.72])
+    rain_level: Literal["Low", "Medium", "High"] | None
+    rain_source: Literal["model", "heuristic", "unavailable"]
+    valid_at: AwareDatetime | None = None
+    issue: Literal["observations_stale", "observations_unavailable", "model_unavailable", "model_partial"] | None = None
+    history_required_minutes: int | None = None
+    history_available_minutes: int | None = None
+
+    @model_validator(mode="after")
+    def validate_sources(self):
+        rain_missing = self.rain_probability is None
+        if rain_missing != (self.rain_source == "unavailable") or rain_missing != (self.rain_level is None):
+            raise ValueError("Rain forecast values and source must agree")
+        if (self.temperature_c is None) != (self.temperature_source == "unavailable"):
+            raise ValueError("Temperature forecast value and source must agree")
+        return self
 
     @field_validator("temperature_c", "rain_probability", mode="before")
     @classmethod
@@ -67,9 +80,9 @@ class ForecastPayload(BaseModel):
     """Provider boundary, validated before any external result can trigger an alert."""
     device_id: str = Field(..., description="Mã định danh trạm quan trắc", examples=["station01"])
     generated_at: AwareDatetime = Field(..., description="Thời điểm tạo dự báo chuẩn UTC")
-    current_temperature: float = Field(..., allow_inf_nan=False, description="Nhiệt độ hiện tại (°C)", examples=[31.2])
-    current_humidity: float = Field(..., allow_inf_nan=False, description="Độ ẩm hiện tại (%)", examples=[78.0])
-    current_pressure: float = Field(..., allow_inf_nan=False, description="Áp suất hiện tại (hPa)", examples=[1006.5])
+    current_temperature: float | None = Field(..., allow_inf_nan=False, description="Nhiệt độ đầu vào (°C)", examples=[31.2])
+    current_humidity: float | None = Field(..., allow_inf_nan=False, description="Độ ẩm đầu vào (%)", examples=[78.0])
+    current_pressure: float | None = Field(..., allow_inf_nan=False, description="Áp suất đầu vào (hPa)", examples=[1006.5])
     temperature_model: Optional[str] = None
     temperature_confidence: Optional[Literal["normal", "degraded", "fallback"]] = None
     temperature_fallback_reason: Optional[str] = None
@@ -95,8 +108,23 @@ class ForecastResponse(ForecastPayload):
     history_span_minutes: float = Field(..., description="Khoảng thời gian giữa mẫu đầu và cuối; không bảo đảm chuỗi không bị mất mẫu")
     history_measurements: int = Field(..., description="Số mẫu của một trạm đã truyền vào inference")
     rain_alert_threshold: float = Field(..., description="Ngưỡng dùng thống nhất cho inference và cảnh báo")
-    forecast_engine: Literal["local_heuristic", "external"]
+    forecast_engine: Literal["local_heuristic", "external", "regional_vvts", "station_inputs"]
+    forecast_scope: Literal["station", "VVTS"] = "station"
+    forecast_reference_at: AwareDatetime | None = None
+    forecast_issue: Literal["model_unavailable", "observations_unavailable", "observations_stale"] | None = None
     fallback_reason: Optional[Literal["standalone_mode", "engine_unavailable", "engine_failed", "invalid_engine_output"]] = None
+
+
+class ForecastTestPeriodRequest(BaseModel):
+    device_id: str = Field(min_length=1, max_length=50)
+    starts_at: AwareDatetime
+    ends_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def validate_period(self):
+        if not timedelta(0) < self.ends_at - self.starts_at <= timedelta(days=7):
+            raise ValueError("Khoảng thử phải dài hơn 0 và không quá 7 ngày")
+        return self
 
 
 class ThresholdUpdateRequest(BaseModel):

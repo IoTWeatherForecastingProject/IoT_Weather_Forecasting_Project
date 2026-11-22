@@ -13,7 +13,7 @@
   <title>Thời tiết tại trạm | IoT Local Weather</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1/dist/apexcharts.min.js"></script>
-  <link rel="stylesheet" href="css/style.css?v=pages-meteo-2">
+  <link rel="stylesheet" href="css/style.css?v=forecast-evaluation-1">
 </head>
 <body>
   <svg class="icon-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -47,6 +47,19 @@
         <article class="forecast-card panel" id="fc-card-30" data-risk="unknown"><div class="forecast-card-top"><span>02 / TIẾP THEO</span><svg id="fc-icon-30"><use href="#i-cloud"/></svg></div><h3>+30 phút</h3><p class="forecast-clock" id="fc-time-30">--:--</p><p class="forecast-temperature" id="fc-temp-30">--.- °C</p><div class="forecast-rain"><span>Khả năng mưa</span><strong id="fc-rain-30">--%</strong></div><div class="prob-track"><span id="fc-bar-30"></span></div><div class="forecast-card-foot"><span id="fc-risk-30">Đang chờ dự báo</span><span id="fc-src-30" class="source-tag hidden"></span></div></article>
         <article class="forecast-card panel" id="fc-card-60" data-risk="unknown"><div class="forecast-card-top"><span>03 / TRONG GIỜ</span><svg id="fc-icon-60"><use href="#i-cloud"/></svg></div><h3>+60 phút</h3><p class="forecast-clock" id="fc-time-60">--:--</p><p class="forecast-temperature" id="fc-temp-60">--.- °C</p><div class="forecast-rain"><span>Khả năng mưa</span><strong id="fc-rain-60">--%</strong></div><div class="prob-track"><span id="fc-bar-60"></span></div><div class="forecast-card-foot"><span id="fc-risk-60">Đang chờ dự báo</span><span id="fc-src-60" class="source-tag hidden"></span></div></article>
       </div><div class="timeline" aria-label="Các mốc dự báo trong 60 phút"><span>HIỆN TẠI</span><div><i></i><i></i><i></i><i></i></div><span>+10 PHÚT</span><span>+30 PHÚT</span><span>+60 PHÚT</span></div><p class="forecast-disclaimer">“Heuristic” cho biết xác suất mưa được suy ra bằng quy tắc khi không có kết quả mô hình.</p>
+      <details id="forecast-evaluation" class="panel detail-panel forecast-evaluation">
+        <summary>Đánh giá dự báo tại trạm · 7 ngày gần nhất</summary>
+        <p class="detail-subtitle">So sánh dự báo với nhiệt độ và tín hiệu tấm dò sau đó. Thống kê mưa tính theo ngưỡng tại lúc lưu dự báo.</p>
+        <p id="evaluation-note" class="detail-note" role="status">Đang chờ tải kết quả.</p>
+        <ul id="evaluation-list" class="detail-list"></ul>
+        <button id="refresh-evaluation" type="button">Làm mới đánh giá</button>
+        <form id="evaluation-test-form">
+          <label>Từ lúc thử (giờ Việt Nam) <input name="starts_at" type="datetime-local" required></label>
+          <label>Đến lúc thử (giờ Việt Nam) <input name="ends_at" type="datetime-local" required></label>
+          <button type="submit">Loại khoảng thử khỏi đánh giá</button>
+        </form>
+        <p id="evaluation-test-status" class="detail-note" role="status"></p>
+      </details>
     </section>
     <div class="insight-grid">
       <section class="rain-panel panel" aria-labelledby="rain-title"><div class="panel-heading"><span class="panel-icon"><svg><use href="#i-rain"/></svg></span><div><p class="eyebrow">THEO DÕI MƯA</p><h2 id="rain-title">Cảnh báo mưa</h2></div></div><p id="rain-outlook" class="rain-outlook">Đang chờ dự báo để đánh giá khả năng mưa.</p><div class="rain-stat"><strong id="rain-peak">--%</strong><span>Xác suất cao nhất<br>trong 60 phút</span></div><div class="rain-threshold"><div><label for="threshold-slider">Ngưỡng cảnh báo</label><strong id="threshold-val">--</strong></div><input type="range" min="40" max="95" value="70" step="5" id="threshold-slider"><p id="threshold-applied">Đang đọc ngưỡng từ server…</p><button id="btn-save-threshold" class="primary-button" type="button">LƯU NGƯỠNG CẢNH BÁO</button><span id="threshold-status" role="status" aria-live="polite"></span></div></section>
@@ -55,6 +68,6 @@
     <section id="station" class="station-section" aria-labelledby="station-title"><div class="section-head"><div><p class="eyebrow">CHUYÊN SÂU</p><h2 id="station-title">Trạm đo &amp; lịch sử</h2><p>Chi tiết cảm biến, đối chuẩn và sự kiện mưa.</p></div></div><div class="station-grid"><section class="panel detail-panel" aria-labelledby="health-title"><div class="detail-header"><h3 id="health-title">Tín hiệu từ trạm</h3><span id="health-badge" class="health-badge">CHƯA ĐÁNH GIÁ</span></div><p class="detail-subtitle">Các tín hiệu có thể kiểm tra qua số đo trạm gửi về.</p><ul id="health-list" class="detail-list"></ul><p id="health-note" class="detail-note">Đang kiểm tra…</p></section><section class="panel detail-panel" aria-labelledby="rain-history-title"><div class="detail-header"><h3 id="rain-history-title">Lịch sử mưa</h3><span class="detail-tag">7 NGÀY</span></div><p class="detail-subtitle">Nhóm theo ngày ghi nhận ướt, gồm hôm nay và 6 ngày trước (giờ Việt Nam).</p><p id="rain-history-note" class="detail-note">Đang tải lịch sử…</p><ul id="rain-history-list" class="detail-list history-list"></ul></section><section class="panel detail-panel reference-panel" aria-labelledby="reference-title"><div class="detail-header"><h3 id="reference-title">Đối chuẩn nhiệt độ</h3><span class="detail-tag">OPEN-METEO</span></div><p class="detail-subtitle">Chênh lệch giữa trạm IoT và dữ liệu tham chiếu gần nhất.</p><div class="reference-value" id="bias-temp" title="IoT trừ tham chiếu tại mốc gần nhất; N/A khi chưa có dữ liệu đối chuẩn">--</div><p class="detail-note">Chỉ hiển thị khi có dữ liệu tham chiếu phù hợp.</p></section></div></section>
   </main>
   <footer class="site-footer"><div class="shell footer-inner"><span>IoT Local Weather <span>/</span> Trạm đo thời tiết địa phương</span><span>Quan trắc IoT · Tham chiếu Open-Meteo</span></div></footer>
-  <script src="js/app.js?v=hardware-signals-1"></script>
+  <script src="js/app.js?v=forecast-evaluation-1"></script>
 </body>
 </html>

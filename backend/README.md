@@ -105,6 +105,18 @@ ON weather_measurements (device_id, timestamp DESC);
 - Phản hồi bổ sung `history_window_minutes`, `history_span_minutes`, `history_measurements` và `rain_alert_threshold` để kiểm tra đầu vào. `history_span_minutes` chỉ là khoảng cách giữa mẫu đầu/cuối, không chứng minh chuỗi liên tục hoặc model đủ feature.
 - Model mưa hiện cần tối thiểu 61 phút lịch sử, khuyến nghị 76 phút. Khi thiếu lịch sử hoặc weights, inference có thể dùng heuristic; **HTTP 200 không chứng minh đang chạy model đã huấn luyện**.
 
+Trạm dùng DO gửi `rain_raw = null`. Model nhiệt độ có `rain_raw` trong schema cần số đo AO. Để thử model nhiệt độ không dùng AO, chạy từ thư mục gốc với CSV số đo thật của một trạm, đã bỏ các lượt thử phần cứng:
+
+```powershell
+& backend/.venv/Scripts/python.exe -m ml.train_station_temperature station.csv --test-start 2026-11-15T04:15:00Z --candidate-dir ml/data/station-model
+```
+
+Lệnh so sánh MAE trên dữ liệu giữ riêng theo thời gian với phương án giữ nhiệt độ gần nhất. Nó chỉ lưu ứng viên ở các mốc có MAE thấp hơn. Sau khi kiểm định đủ dữ liệu, có thể cấu hình `FORECAST_ENGINE_MODE=auto` và `TEMPERATURE_MODEL_DIR` là đường dẫn tuyệt đối tới thư mục model và schema đã duyệt. Khi chưa có model phù hợp, dự báo nhiệt độ giữ số đo gần nhất và API ghi `temperature_source=persistence`.
+
+Chế độ `FORECAST_ENGINE_MODE=regional_vvts` dùng artifact `ai_engine/saved_models/vvts_forecast.joblib` và bản tin Tân Sơn Nhất từ [Aviation Weather Center](https://aviationweather.gov/data/api/) cho trạm trong `REGIONAL_FORECAST_DEVICE_ID` (mặc định `station01`). Nó cần môi trường inference và HTTPS đi ra. API ghi `forecast_scope=VVTS`, thời gian bản tin và thời điểm dự báo của từng mốc. Mốc +10 phút, bản tin quá cũ, hoặc mốc đã qua được trả về là chưa có dữ liệu. API có thể trả dự báo khu vực ngay cả khi IoT offline. Backend gửi xác suất hợp lệ lên OLED theo MQTT hiện có, với `threshold_reached=false` vì dữ liệu sân bay chỉ phục vụ hiển thị. Cảnh báo khi tấm dò báo ướt do firmware xử lý tại chỗ.
+
+Chế độ `FORECAST_ENGINE_MODE=station_inputs` dùng riêng số đo PostgreSQL của trạm được yêu cầu. Mốc +30 và +60 phút dùng `station_input_forecast.joblib`. Mốc +10 phút dùng `station_short_forecast.joblib`, được đánh giá trên quan trắc NEA Singapore. Cả hai dùng trung vị số đo trong 5 phút ở từng mốc đầu vào. API ghi `forecast_engine=station_inputs`, `forecast_scope=station` và `forecast_reference_at` bằng thời điểm mẫu mới nhất đã dùng. Khi thiếu lịch sử +10 phút, nhiệt độ giữ ở số đo mới nhất và xác suất mưa chưa có dữ liệu. Khi số đo mới nhất đã cũ, dự báo được bỏ qua. Backend chọn xác suất hợp lệ lớn nhất từ các mốc do mô hình tính; nếu đạt ngưỡng đang áp dụng, gửi cảnh báo qua MQTT với cooldown hiện có và cập nhật trạng thái màu LED qua bản tin forecast. Mốc chưa có xác suất từ mô hình không kích cảnh báo.
+
 Các bài kiểm thử hợp đồng BE-05 dùng DB SQLite riêng, không sửa dữ liệu hay ngưỡng trên PostgreSQL đang thu thập:
 
 ```powershell

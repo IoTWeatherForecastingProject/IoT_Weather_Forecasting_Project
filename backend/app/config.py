@@ -36,7 +36,9 @@ class Settings(BaseSettings):
     # Alert & Closed-loop actuation
     RAIN_ALERT_THRESHOLD: float = 0.70
     # Opt in to the integrated TV2/TV3 runtime; standalone remains available.
-    FORECAST_ENGINE_MODE: Literal["auto", "heuristic"] = "heuristic"
+    FORECAST_ENGINE_MODE: Literal["auto", "heuristic", "regional_vvts", "station_inputs"] = "heuristic"
+    REGIONAL_FORECAST_DEVICE_ID: str = "station01"
+    TEMPERATURE_MODEL_DIR: str | None = None
     ANALYTICS_ENGINE_MODE: Literal["disabled", "auto"] = "disabled"
     ALERT_COOLDOWN_SECONDS: float = Field(default=180, ge=0)
     ALERT_MQTT_ACK_TIMEOUT_SECONDS: float = Field(default=2, gt=0)

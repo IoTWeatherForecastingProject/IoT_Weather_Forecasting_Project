@@ -34,10 +34,15 @@ class ForecastClient:
                 df = pd.DataFrame(recent_measurements)
                 candidate = predictor(df, threshold=threshold)
                 result = ForecastPayload.model_validate(candidate).model_dump(mode="json")
-                if result["device_id"] != latest["device_id"]:
-                    raise ValueError("Provider returned another device")
+                if result["device_id"] != latest["device_id"] or any(
+                    result[key] is None for key in ("current_temperature", "current_humidity", "current_pressure")
+                ):
+                    raise ValueError("Provider did not return valid station observations")
                 # TV1 owns the alert decision and configured threshold.
-                result["alert_triggered"] = max(result[f"plus_{h}m"]["rain_probability"] for h in (10, 30, 60)) >= threshold
+                predictions = [result[f"plus_{h}m"]["rain_probability"] for h in (10, 30, 60)]
+                if any(p is None for p in predictions):
+                    raise ValueError("Station provider returned unavailable rain predictions")
+                result["alert_triggered"] = max(predictions) >= threshold
                 if not result["alert_triggered"]:
                     result["alert_message"] = None
                 result.update(forecast_engine="external", fallback_reason=None)
@@ -79,7 +84,7 @@ class ForecastClient:
         return {
             "forecast_engine": "local_heuristic",
             "fallback_reason": fallback_reason,
-            "temperature_model": "LocalHeuristic",
+            "temperature_model": "Persistence",
             "temperature_confidence": "fallback",
             "temperature_fallback_reason": fallback_reason,
             "device_id": latest.get("device_id", "station01"),
@@ -88,22 +93,22 @@ class ForecastClient:
             "current_humidity": round(cur_hum, 2),
             "current_pressure": round(cur_press, 2),
             "plus_10m": {
-                "temperature_c": round(cur_temp - 0.1, 2),
-                "temperature_source": "heuristic",
+                "temperature_c": round(cur_temp, 2),
+                "temperature_source": "persistence",
                 "rain_probability": round(p10, 2),
                 "rain_level": get_level(p10),
                 "rain_source": "heuristic",
             },
             "plus_30m": {
-                "temperature_c": round(cur_temp - 0.3, 2),
-                "temperature_source": "heuristic",
+                "temperature_c": round(cur_temp, 2),
+                "temperature_source": "persistence",
                 "rain_probability": round(p30, 2),
                 "rain_level": get_level(p30),
                 "rain_source": "heuristic",
             },
             "plus_60m": {
-                "temperature_c": round(cur_temp - 0.7, 2),
-                "temperature_source": "heuristic",
+                "temperature_c": round(cur_temp, 2),
+                "temperature_source": "persistence",
                 "rain_probability": round(p60, 2),
                 "rain_level": get_level(p60),
                 "rain_source": "heuristic",
